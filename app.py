@@ -12,7 +12,8 @@ import google.generativeai as genai
 
 # --- CONFIGURAÇÃO ---
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "segredo-padrao-dev")
+# Se não tiver secret key, usa uma padrão para não travar
+app.secret_key = os.environ.get("SECRET_KEY", "chave_super_secreta_padrao")
 
 # Banco de Dados
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
@@ -22,12 +23,26 @@ db = SQLAlchemy(app)
 # Variáveis de Ambiente
 DIRECTUS_URL = os.environ.get("DIRECTUS_URL")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+# --- CONFIGURAÇÃO CONDICIONAL DO SLACK ---
+# Se você não colocar as chaves no Dokploy, o site liga mesmo assim
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
 
-# Configuração Slack e Gemini
-slack_app = BoltApp(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
-handler = SlackRequestHandler(slack_app)
+slack_app = None
+handler = None
+
+if SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET:
+    try:
+        slack_app = BoltApp(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
+        handler = SlackRequestHandler(slack_app)
+        print("✅ Slack conectado com sucesso!")
+    except Exception as e:
+        print(f"⚠️ Erro ao configurar Slack: {e}")
+else:
+    print("⚠️ Slack NÃO configurado (Chaves ausentes). O site vai rodar sem o Bot.")
+
+# Configuração Gemini
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
@@ -66,6 +81,8 @@ def tool_atualizar_estoque(nome_produto, quantidade):
         return f"Sucesso! {produto.nome} agora tem {produto.quantidade} un."
 
 tools = [tool_atualizar_estoque]
+# Só cria o model se tiver chave
+model_gemini = None
 if GEMINI_API_KEY:
     model_gemini = genai.GenerativeModel('gemini-1.5-flash', tools=tools)
 
@@ -79,6 +96,9 @@ def index():
         password = request.form.get('login_password')
         try:
             # Login no Directus
+            if not DIRECTUS_URL:
+                return render_template('index.html', view_mode='login', erro="URL do Directus não configurada.")
+                
             resp = requests.post(f"{DIRECTUS_URL}/auth/login", json={"email": email, "password": password})
             if resp.status_code == 200:
                 session['user_token'] = resp.json()['data']['access_token']
@@ -89,7 +109,7 @@ def index():
         except Exception as e:
             return render_template('index.html', view_mode='login', erro=f"Erro de conexão: {e}")
 
-    # 2. Se já estiver logado, manda pro dashboard, senão login
+    # 2. Se já estiver logado
     if 'user_email' in session:
         return redirect(url_for('dashboard'))
     
@@ -98,18 +118,18 @@ def index():
 @app.route('/dashboard')
 def dashboard():
     if 'user_email' not in session: return redirect(url_for('index'))
-    
-    produtos = Produto.query.order_by(Produto.nome).all()
-    amostras = Amostra.query.order_by(Amostra.nome).all()
-    return render_template('index.html', view_mode='dashboard', produtos=produtos, amostras=amostras, user=session['user_email'])
+    try:
+        produtos = Produto.query.order_by(Produto.nome).all()
+        amostras = Amostra.query.order_by(Amostra.nome).all()
+        return render_template('index.html', view_mode='dashboard', produtos=produtos, amostras=amostras, user=session['user_email'])
+    except Exception as e:
+         return f"Erro ao conectar no banco de dados: {e}"
 
 @app.route('/acao/<tipo>/<int:id>', methods=['GET', 'POST'])
 def acao(tipo, id):
     if 'user_email' not in session: return redirect(url_for('index'))
     
     msg_sucesso = None
-    
-    # Lógica de processamento do formulário
     if request.method == 'POST':
         if tipo == 'produto':
             item = Produto.query.get(id)
@@ -118,7 +138,6 @@ def acao(tipo, id):
             db.session.add(Log(acao="WEB_RETIRADA", item_id=item.id, usuario_nome=session['user_email']))
             db.session.commit()
             msg_sucesso = f"Retirado {qtd} un de {item.nome}!"
-        
         elif tipo == 'amostra':
             item = Amostra.query.get(id)
             acao_realizada = request.form.get('acao_amostra')
@@ -132,7 +151,6 @@ def acao(tipo, id):
             db.session.commit()
             msg_sucesso = "Status atualizado com sucesso!"
 
-    # Busca o item atualizado para exibir
     if tipo == 'produto':
         item = Produto.query.get_or_404(id)
     else:
@@ -145,17 +163,21 @@ def logout():
     session.clear()
     return redirect(url_for('index'))
 
-# --- SLACK E WORKERS ---
+# --- SLACK E WORKERS (Só ativa se tiver configurado) ---
 @app.route("/slack/events", methods=["POST"])
-def slack_events():
-    return handler.handle(request)
+def slack_events_route():
+    if handler:
+        return handler.handle(request)
+    return "Slack não configurado neste servidor.", 200
 
-@slack_app.event("message")
-def handle_slack(body, say):
-    if "bot_id" in body["event"]: return
-    chat = model_gemini.start_chat(enable_automatic_function_calling=True)
-    res = chat.send_message(body["event"].get("text", ""))
-    say(res.text)
+# Registra o evento do Slack APENAS se o app existir
+if slack_app and model_gemini:
+    @slack_app.event("message")
+    def handle_slack(body, say):
+        if "bot_id" in body["event"]: return
+        chat = model_gemini.start_chat(enable_automatic_function_calling=True)
+        res = chat.send_message(body["event"].get("text", ""))
+        say(res.text)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
