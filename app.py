@@ -99,7 +99,7 @@ def index():
             if not DIRECTUS_URL:
                 return render_template('index.html', view_mode='login', erro="URL do Directus não configurada.")
                 
-            resp = requests.post(f"{DIRECTUS_URL}/auth/login", json={"email": email, "password": password})
+            resp = requests.post(f"{DIRECTUS_URL}/auth/login", json={"email": email, "password": password}, verify=False)
             if resp.status_code == 200:
                 session['user_token'] = resp.json()['data']['access_token']
                 session['user_email'] = email
