@@ -2,15 +2,15 @@ import os
 import logging
 from datetime import datetime, timedelta
 import requests
-# Import novo para silenciar o aviso de segurança
 import urllib3
-from flask import Flask, request, render_template, session, redirect, url_for, flash
+import json
+from flask import Flask, request, render_template, session, redirect, url_for, jsonify
 from flask_sqlalchemy import SQLAlchemy
-# Adicionado para a busca funcionar (Nome OU SKU)
 from sqlalchemy import or_
 from slack_bolt import App as BoltApp
 from slack_bolt.adapter.flask import SlackRequestHandler
 import google.generativeai as genai
+from google.generativeai.types import FunctionDeclaration, Tool
 
 # --- SILENCIAR AVISOS DE SSL ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -48,7 +48,6 @@ class Produto(db.Model):
     quantidade = db.Column(db.Integer)
     localizacao = db.Column(db.String(50))
     estoque_minimo = db.Column(db.Integer, default=5)
-    # Novos campos (exatamente como no seu Directus)
     sku_produtos = db.Column(db.String(100))
     categoria_produtos = db.Column(db.String(100))
 
@@ -64,7 +63,6 @@ class Amostra(db.Model):
     logradouro = db.Column(db.String(255))
     data_saida = db.Column(db.DateTime)
     data_prevista_retorno = db.Column(db.DateTime)
-    # Novos campos (exatamente como no seu Directus)
     sku_amostras = db.Column(db.String(100))
     categoria_amostra = db.Column(db.String(100))
 
@@ -78,31 +76,96 @@ class Log(db.Model):
     usuario_nome = db.Column(db.String(100))
     data_evento = db.Column(db.DateTime, default=datetime.now)
 
-# --- IA GEMINI ---
-def tool_consultar_status():
-    """Consulta geral do banco de dados (para Admin/Bot)."""
-    with app.app_context():
-        baixos = Produto.query.filter(Produto.quantidade <= Produto.estoque_minimo).all()
-        txt_baixos = ", ".join([f"{p.nome} ({p.quantidade})" for p in baixos]) if baixos else "Estoque OK"
-        
-        rua = Amostra.query.filter(Amostra.status == 'EM_RUA').all()
-        txt_rua = ", ".join([f"{a.nome} com {a.vendedor_responsavel}" for a in rua]) if rua else "Nenhuma amostra em rua"
-        
-        return f"ALERTA ESTOQUE: {txt_baixos}\nAMOSTRAS FORA: {txt_rua}"
+# --- FUNÇÕES PARA A IA (TOOLS) ---
 
-def tool_atualizar_estoque(nome_produto, qtd_retirada):
+def api_alterar_estoque(nome_ou_sku, quantidade, usuario):
+    """Altera o estoque de um produto (soma ou subtrai)."""
     with app.app_context():
-        produto = Produto.query.filter(Produto.nome.ilike(f'%{nome_produto}%')).first()
-        if not produto: return "Produto não encontrado."
-        produto.quantidade -= int(qtd_retirada)
-        db.session.add(Log(tipo_item='produto', item_id=produto.id, acao='SLACK_RETIRADA', quantidade=qtd_retirada, usuario_nome='SlackBot'))
+        produto = Produto.query.filter(or_(
+            Produto.nome.ilike(f'%{nome_ou_sku}%'),
+            Produto.sku_produtos.ilike(f'%{nome_ou_sku}%')
+        )).first()
+        
+        if not produto:
+            return f"Erro: Não encontrei nenhum produto com o nome ou SKU '{nome_ou_sku}'."
+        
+        nova_qtd = produto.quantidade + int(quantidade)
+        if nova_qtd < 0:
+             return f"Erro: O produto {produto.nome} só tem {produto.quantidade} unidades. Não dá para retirar {abs(int(quantidade))}."
+
+        produto.quantidade = nova_qtd
+        
+        # LOG COM O NOME DO USUÁRIO
+        acao_log = 'CHAT_ENTRADA' if int(quantidade) > 0 else 'CHAT_SAIDA'
+        db.session.add(Log(
+            tipo_item='produto', 
+            item_id=produto.id, 
+            acao=acao_log, 
+            quantidade=abs(int(quantidade)), 
+            usuario_nome=usuario
+        ))
         db.session.commit()
-        return f"Atualizado! {produto.nome}: {produto.quantidade} un."
+        return f"Sucesso! Estoque de {produto.nome} atualizado para {produto.quantidade}. (Ação registrada para {usuario})"
 
-model_gemini = None
+def api_movimentar_amostra(nome_ou_pat, acao, cliente_destino, usuario):
+    """Movimenta uma amostra (Retirar ou Devolver). Acao deve ser 'retirar' ou 'devolver'."""
+    with app.app_context():
+        amostra = Amostra.query.filter(or_(
+            Amostra.nome.ilike(f'%{nome_ou_pat}%'),
+            Amostra.codigo_patrimonio.ilike(f'%{nome_ou_pat}%'),
+            Amostra.sku_amostras.ilike(f'%{nome_ou_pat}%')
+        )).first()
+
+        if not amostra:
+            return f"Erro: Amostra '{nome_ou_pat}' não encontrada."
+
+        if acao.lower() == 'retirar':
+            if amostra.status != 'DISPONIVEL':
+                return f"Erro: A amostra {amostra.nome} já está com {amostra.vendedor_responsavel}."
+            
+            amostra.status = 'EM_RUA'
+            amostra.vendedor_responsavel = usuario
+            amostra.cliente_destino = cliente_destino or "Cliente Não Informado"
+            amostra.data_saida = datetime.now()
+            amostra.data_prevista_retorno = datetime.now() + timedelta(days=7)
+            
+            db.session.add(Log(tipo_item='amostra', item_id=amostra.id, acao='CHAT_RETIRADA', usuario_nome=usuario))
+        
+        elif acao.lower() == 'devolver':
+            if amostra.status == 'DISPONIVEL':
+                return f"A amostra {amostra.nome} já consta como disponível."
+            
+            amostra.status = 'DISPONIVEL'
+            amostra.vendedor_responsavel = None
+            amostra.cliente_destino = None
+            
+            db.session.add(Log(tipo_item='amostra', item_id=amostra.id, acao='CHAT_DEVOLUCAO', usuario_nome=usuario))
+        
+        else:
+            return "Ação desconhecida. Use 'retirar' ou 'devolver'."
+
+        db.session.commit()
+        return f"Feito! Amostra {amostra.nome} agora está {amostra.status}."
+
+def api_consultar(termo):
+    """Consulta informações gerais de produtos ou amostras."""
+    with app.app_context():
+        # Busca Produto
+        p = Produto.query.filter(Produto.nome.ilike(f'%{termo}%')).first()
+        res_p = f"Produto: {p.nome} | Qtd: {p.quantidade} | Local: {p.localizacao}" if p else ""
+        
+        # Busca Amostra
+        a = Amostra.query.filter(Amostra.nome.ilike(f'%{termo}%')).first()
+        status_a = f"Com {a.vendedor_responsavel}" if a and a.status != 'DISPONIVEL' else "Disponível"
+        res_a = f"Amostra: {a.nome} | Status: {status_a}" if a else ""
+        
+        if not p and not a: return "Não encontrei nada com esse nome."
+        return f"{res_p}\n{res_a}"
+
+# Configuração do Gemini com Tools
+tools_gemini = [api_alterar_estoque, api_movimentar_amostra, api_consultar]
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    model_gemini = genai.GenerativeModel('gemini-1.5-flash', tools=[tool_consultar_status, tool_atualizar_estoque])
 
 # --- ROTAS ---
 
@@ -114,7 +177,6 @@ def index():
         try:
             if not DIRECTUS_URL: return render_template('index.html', view_mode='login', erro="Sem URL Directus")
             
-            # 1. Login para pegar Token (Com verify=False)
             resp = requests.post(
                 f"{DIRECTUS_URL}/auth/login", 
                 json={"email": email, "password": password},
@@ -126,7 +188,6 @@ def index():
                 session['user_token'] = token
                 session['user_email'] = email
                 
-                # 2. Busca Perfil para pegar a ROLE (Com verify=False)
                 headers = {"Authorization": f"Bearer {token}"}
                 user_info = requests.get(
                     f"{DIRECTUS_URL}/users/me?fields=role.name", 
@@ -156,8 +217,6 @@ def dashboard():
     if 'user_email' not in session: return redirect('/elostock/')
     
     role = session.get('user_role', 'PUBLIC')
-    
-    # Captura busca e filtro da URL
     search_query = request.args.get('q', '').strip()
     filter_cat = request.args.get('cat', '').strip()
 
@@ -165,12 +224,10 @@ def dashboard():
     amostras = []
     categorias_disponiveis = set()
 
-    # Lógica de Permissão
     ver_tudo = role == 'ADMINISTRATOR'
     ver_compras = role == 'COMPRAS' or ver_tudo
     ver_vendas = role == 'VENDAS' or ver_tudo
     
-    # --- QUERY PRODUTOS ---
     if ver_compras:
         query = Produto.query
         if search_query:
@@ -178,13 +235,11 @@ def dashboard():
         if filter_cat:
             query = query.filter(Produto.categoria_produtos == filter_cat)
         produtos = query.order_by(Produto.nome).all()
-
-        # Pegar categorias para o dropdown
+        
         cats = db.session.query(Produto.categoria_produtos).distinct().all()
         for c in cats:
             if c.categoria_produtos: categorias_disponiveis.add(c.categoria_produtos)
         
-    # --- QUERY AMOSTRAS ---
     if ver_vendas:
         query = Amostra.query
         if search_query:
@@ -193,7 +248,6 @@ def dashboard():
             query = query.filter(Amostra.categoria_amostra == filter_cat)
         amostras = query.order_by(Amostra.status.desc(), Amostra.nome).all()
 
-        # Pegar categorias para o dropdown
         cats = db.session.query(Amostra.categoria_amostra).distinct().all()
         for c in cats:
             if c.categoria_amostra: categorias_disponiveis.add(c.categoria_amostra)
@@ -207,15 +261,43 @@ def dashboard():
                            user=session['user_email'],
                            role=role) 
 
+# --- NOVA ROTA API CHAT ---
+@app.route('/elostock/api/chat', methods=['POST'])
+def api_chat():
+    if 'user_email' not in session:
+        return jsonify({"response": "Você precisa estar logado."}), 401
+    
+    data = request.json
+    user_msg = data.get('message')
+    usuario_atual = session['user_email']
+
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash', tools=tools_gemini)
+        chat = model.start_chat(enable_automatic_function_calling=True)
+        
+        # Injetamos o contexto do usuário na mensagem do sistema
+        prompt_sistema = f"""
+        Você é o assistente do EloStock. O usuário atual é: {usuario_atual}.
+        SEMPRE que chamar uma função de alterar ou movimentar, passe '{usuario_atual}' no argumento 'usuario'.
+        Se o usuário disser 'peguei 5', entenda como quantidade negativa (-5).
+        Se o usuário disser 'adicionei 5' ou 'chegou 5', entenda como positiva (+5).
+        """
+        
+        response = chat.send_message(f"{prompt_sistema}\nUsuário diz: {user_msg}")
+        return jsonify({"response": response.text})
+
+    except Exception as e:
+        print(f"Erro Chat: {e}")
+        return jsonify({"response": "Desculpe, tive um erro interno ao processar seu pedido."})
+
 @app.route('/elostock/acao/<tipo>/<int:id>', methods=['GET', 'POST'])
 def acao(tipo, id):
     if 'user_email' not in session: return redirect('/elostock/')
     
     role = session.get('user_role', 'PUBLIC')
-    if tipo == 'produto' and role == 'VENDAS':
-        return "⛔ Acesso Negado: Vendas não mexe no Almoxarifado."
-    if tipo == 'amostra' and role == 'COMPRAS':
-        return "⛔ Acesso Negado: Compras não mexe no Showroom."
+    # Validacoes de seguranca mantidas...
+    if tipo == 'produto' and role == 'VENDAS': return "⛔ Acesso Negado"
+    if tipo == 'amostra' and role == 'COMPRAS': return "⛔ Acesso Negado"
 
     msg_sucesso = None
     item = None
@@ -257,7 +339,6 @@ def logout():
     session.clear()
     return redirect('/elostock/')
 
-# --- SLACK ---
 if slack_app:
     @app.route("/elostock/slack/events", methods=["POST"])
     def slack_events(): return handler.handle(request)
