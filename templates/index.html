@@ -10,8 +10,7 @@
         body { background-color: #f0f2f5; font-family: 'Segoe UI', system-ui, sans-serif; }
         .content-box { background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); padding: 2rem; }
         .card-item { transition: all 0.2s; border: none; border-bottom: 1px solid #eee; }
-        .card-item:last-child { border-bottom: none; }
-        .badge-status { font-size: 0.8em; padding: 0.4em 0.8em; }
+        .card-item:hover { background-color: #fcfcfc; }
     </style>
 </head>
 <body>
@@ -19,13 +18,13 @@
     {% if view_mode == 'login' %}
     <div class="container d-flex align-items-center justify-content-center" style="height: 100vh;">
         <div class="content-box text-center" style="width: 100%; max-width: 400px;">
-            <i class="bi bi-box-seam-fill text-primary mb-3" style="font-size: 3rem;"></i>
-            <h3 class="fw-bold mb-4">SmartStock</h3>
+            <i class="bi bi-shield-lock-fill text-primary mb-3" style="font-size: 3rem;"></i>
+            <h3 class="fw-bold mb-4">Acesso Restrito</h3>
             {% if erro %}<div class="alert alert-danger py-2 small">{{ erro }}</div>{% endif %}
             <form method="POST">
-                <input type="email" name="login_email" class="form-control mb-3" placeholder="E-mail" required>
+                <input type="email" name="login_email" class="form-control mb-3" placeholder="E-mail Corporativo" required>
                 <input type="password" name="login_password" class="form-control mb-4" placeholder="Senha" required>
-                <button type="submit" class="btn btn-primary w-100 py-2 fw-bold">ENTRAR</button>
+                <button type="submit" class="btn btn-primary w-100 py-2 fw-bold">ACESSAR SISTEMA</button>
             </form>
         </div>
     </div>
@@ -33,7 +32,10 @@
     {% elif view_mode == 'dashboard' %}
     <nav class="navbar navbar-dark bg-dark mb-4">
         <div class="container">
-            <span class="navbar-brand fw-bold">SmartStock <small class="fw-normal opacity-50">Logística</small></span>
+            <span class="navbar-brand fw-bold">
+                SmartStock 
+                <span class="badge bg-secondary ms-2" style="font-size: 0.7em">{{ role }}</span>
+            </span>
             <div class="d-flex align-items-center gap-3">
                 <span class="text-white small d-none d-md-block">{{ user }}</span>
                 <a href="/logout" class="btn btn-outline-secondary btn-sm text-white">Sair</a>
@@ -42,11 +44,14 @@
     </nav>
 
     <div class="container">
-        <div class="row g-4">
-            <div class="col-lg-5">
+        <div class="row g-4 justify-content-center">
+            
+            {% if produtos|length > 0 or role == 'ADMINISTRATOR' and amostras|length == 0 %}
+            <div class="{{ 'col-12' if amostras|length == 0 else 'col-lg-5' }}">
                 <div class="content-box p-0 h-100">
-                    <div class="p-3 border-bottom bg-light rounded-top">
+                    <div class="p-3 border-bottom bg-light rounded-top d-flex justify-content-between">
                         <h6 class="mb-0 fw-bold text-secondary">📦 Almoxarifado</h6>
+                        <span class="badge bg-secondary">{{ produtos|length }} itens</span>
                     </div>
                     <div class="p-3">
                         {% for p in produtos %}
@@ -55,22 +60,26 @@
                             <div>
                                 <div class="fw-bold">{{ p.nome }}</div>
                                 <small class="text-muted">{{ p.localizacao }}</small>
-                                {% if critico %}<span class="badge bg-danger ms-1">Baixo!</span>{% endif %}
                             </div>
                             <div class="text-end">
                                 <div class="h5 mb-0 fw-bold">{{ p.quantidade }}</div>
                                 <a href="/acao/produto/{{ p.id }}" class="btn btn-link btn-sm p-0 text-decoration-none">Retirar</a>
                             </div>
                         </div>
+                        {% else %}
+                            <div class="p-4 text-center text-muted">Acesso restrito ou sem produtos.</div>
                         {% endfor %}
                     </div>
                 </div>
             </div>
+            {% endif %}
 
-            <div class="col-lg-7">
+            {% if amostras|length > 0 or role == 'ADMINISTRATOR' and produtos|length == 0 %}
+            <div class="{{ 'col-12' if produtos|length == 0 else 'col-lg-7' }}">
                 <div class="content-box p-0 h-100">
-                    <div class="p-3 border-bottom bg-light rounded-top">
-                        <h6 class="mb-0 fw-bold text-secondary">💎 Showroom & Amostras</h6>
+                    <div class="p-3 border-bottom bg-light rounded-top d-flex justify-content-between">
+                        <h6 class="mb-0 fw-bold text-secondary">💎 Showroom & Logística</h6>
+                        <span class="badge bg-secondary">{{ amostras|length }} peças</span>
                     </div>
                     <div class="p-3">
                         {% for a in amostras %}
@@ -78,110 +87,87 @@
                             <div class="d-flex justify-content-between align-items-start mb-2">
                                 <div>
                                     <h6 class="mb-0 fw-bold">{{ a.nome }}</h6>
-                                    <small class="text-muted" style="font-size: 0.8rem;">PAT: {{ a.codigo_patrimonio or 'S/N' }}</small>
+                                    <small class="text-muted">PAT: {{ a.codigo_patrimonio or 'S/N' }}</small>
                                 </div>
                                 {% if a.status == 'DISPONIVEL' %}
-                                    <span class="badge bg-success bg-opacity-10 text-success border border-success badge-status">Disponível</span>
+                                    <span class="badge bg-success bg-opacity-10 text-success border border-success">Disponível</span>
                                 {% else %}
-                                    <span class="badge bg-warning bg-opacity-10 text-warning border border-warning text-dark badge-status">Em Rua</span>
+                                    <span class="badge bg-warning bg-opacity-10 text-warning border border-warning text-dark">Em Rua</span>
                                 {% endif %}
                             </div>
 
                             {% if a.status == 'DISPONIVEL' %}
-                                <div class="d-flex align-items-center text-muted small mt-2">
-                                    <i class="bi bi-geo-alt-fill me-1 text-success"></i>
-                                    <span>Local Físico: <strong>{{ a.local_fisico or 'Não definido' }}</strong></span>
-                                </div>
+                                <div class="small text-muted mt-2"><i class="bi bi-geo-alt-fill me-1"></i> Local: {{ a.local_fisico or 'Não definido' }}</div>
                             {% else %}
                                 <div class="bg-light p-2 rounded mt-2 border">
                                     <div class="d-flex justify-content-between small mb-1">
                                         <span><strong>Resp:</strong> {{ a.vendedor_responsavel }}</span>
                                         <span class="text-danger fw-bold">Volta: {{ a.data_prevista_retorno.strftime('%d/%m') if a.data_prevista_retorno else '?' }}</span>
                                     </div>
-                                    <div class="small text-muted border-top pt-1 mt-1">
-                                        <i class="bi bi-truck me-1"></i> Enviado para: <strong>{{ a.cliente_destino or 'Cliente ñ inf.' }}</strong><br>
-                                        <span class="ms-3">{{ a.logradouro or 'Sem endereço cadastrado' }}</span>
+                                    <div class="small text-muted pt-1">
+                                        <i class="bi bi-truck me-1"></i> Destino: <strong>{{ a.cliente_destino or 'Não inf.' }}</strong>
                                     </div>
                                 </div>
                             {% endif %}
                             
                             <a href="/acao/amostra/{{ a.id }}" class="btn btn-outline-dark btn-sm w-100 mt-2 rounded-pill">Gerenciar</a>
                         </div>
+                        {% else %}
+                            <div class="p-4 text-center text-muted">Acesso restrito ou sem amostras.</div>
                         {% endfor %}
                     </div>
                 </div>
             </div>
+            {% endif %}
+
         </div>
     </div>
 
     {% elif view_mode == 'acao' %}
     <div class="container d-flex align-items-center justify-content-center" style="min-height: 100vh;">
         <div class="content-box shadow-lg" style="width: 100%; max-width: 500px;">
-            
             {% if msg %}
                 <div class="text-center">
                     <div class="text-success mb-3"><i class="bi bi-check-circle-fill fs-1"></i></div>
-                    <h4>Atualizado!</h4>
+                    <h4>Sucesso!</h4>
                     <p class="text-muted">{{ msg }}</p>
                     <a href="/dashboard" class="btn btn-dark w-100">Voltar</a>
                 </div>
             {% else %}
-            
                 <h5 class="text-secondary small text-uppercase mb-1">Gerenciando</h5>
                 <h2 class="fw-bold mb-4">{{ item.nome }}</h2>
-
                 <form method="POST">
                     {% if tipo == 'produto' %}
                         <div class="text-center mb-4">
                             <span class="display-5 fw-bold text-primary">{{ item.quantidade }}</span>
                             <span class="text-muted d-block">em estoque</span>
                         </div>
-                        <label class="fw-bold">Quantidade a retirar</label>
+                        <label class="fw-bold">Qtd Retirada</label>
                         <input type="number" name="qtd" class="form-control mb-3" value="1" min="1" max="{{ item.quantidade }}">
                         <button type="submit" class="btn btn-primary w-100 py-2">Confirmar</button>
-                    
                     {% else %}
                         {% if item.status == 'DISPONIVEL' %}
-                            <div class="alert alert-info small mb-3">
-                                <i class="bi bi-info-circle me-1"></i> Item está em: <strong>{{ item.local_fisico or 'Local não definido' }}</strong>
-                            </div>
-                            
-                            <h6 class="fw-bold border-bottom pb-2 mb-3">Dados de Envio</h6>
-                            
                             <div class="mb-3">
-                                <label class="form-label small text-muted">Cliente / Destinatário</label>
-                                <input type="text" name="cliente_destino" class="form-control" required placeholder="Ex: Agência XYZ">
+                                <label class="form-label small text-muted">Cliente Destino</label>
+                                <input type="text" name="cliente_destino" class="form-control" required>
                             </div>
-                            
                             <div class="mb-3">
-                                <label class="form-label small text-muted">Endereço de Envio (Logradouro)</label>
-                                <textarea name="logradouro" class="form-control" rows="2" required placeholder="Rua, Número, Cidade..."></textarea>
+                                <label class="form-label small text-muted">Endereço de Envio</label>
+                                <textarea name="logradouro" class="form-control" rows="2" required></textarea>
                             </div>
-                            
-                            <div class="mb-4">
-                                <label class="form-label small text-muted">Dias de Empréstimo</label>
+                             <div class="mb-4">
+                                <label class="form-label small text-muted">Prazo</label>
                                 <select name="dias_prazo" class="form-select">
-                                    <option value="3">3 dias (Rápido)</option>
-                                    <option value="7" selected>7 dias (Padrão)</option>
-                                    <option value="15">15 dias (Longo)</option>
+                                    <option value="7">7 dias</option>
+                                    <option value="15">15 dias</option>
                                 </select>
                             </div>
-
                             <input type="hidden" name="acao_amostra" value="retirar">
-                            <button type="submit" class="btn btn-warning w-100 fw-bold py-2">
-                                <i class="bi bi-truck me-2"></i>Registrar Saída
-                            </button>
+                            <button type="submit" class="btn btn-warning w-100 fw-bold py-2">Registrar Saída</button>
                         {% else %}
-                            <div class="text-center p-3 bg-light rounded mb-3">
-                                <p class="mb-1 text-muted small">Está com</p>
-                                <h5 class="fw-bold">{{ item.vendedor_responsavel }}</h5>
-                                <p class="mb-0 small text-danger">Desde: {{ item.data_saida.strftime('%d/%m') if item.data_saida else '-' }}</p>
-                            </div>
-                            
+                            <div class="alert alert-warning text-center">Responsável: {{ item.vendedor_responsavel }}</div>
                             <input type="hidden" name="acao_amostra" value="devolver">
-                            <button type="submit" class="btn btn-success w-100 fw-bold py-2">
-                                <i class="bi bi-box-arrow-in-down me-2"></i>Confirmar Devolução
-                            </button>
+                            <button type="submit" class="btn btn-success w-100 fw-bold py-2">Registrar Devolução</button>
                         {% endif %}
                     {% endif %}
                 </form>
