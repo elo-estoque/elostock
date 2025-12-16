@@ -4,40 +4,152 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>EloStock Logística</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    
     <style>
-        body { background-color: #f0f2f5; font-family: 'Segoe UI', system-ui, sans-serif; }
-        .content-box { background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); padding: 2rem; }
-        .card-item { transition: all 0.2s; border: none; border-bottom: 1px solid #eee; }
-        .card-item:hover { background-color: #fcfcfc; }
-        .badge-cat { font-size: 0.75rem; background-color: #e9ecef; color: #495057; border-radius: 4px; padding: 2px 6px; }
-        .badge-sku { font-size: 0.7rem; color: #6c757d; font-family: monospace; }
+        /* --- PALETA ELO ADMIN (DARK MODE) --- */
+        :root {
+            --brand-dark: #050505;
+            --brand-card: #121212; /* Cor dos cards */
+            --brand-wine: #E31937; /* Cor principal */
+            --brand-hover: #C2132F;
+            --text-main: #E5E7EB;
+            --text-muted: #9CA3AF;
+            --border-color: rgba(255, 255, 255, 0.1);
+            --input-bg: rgba(255, 255, 255, 0.05);
+        }
+
+        body { 
+            background-color: var(--brand-dark); 
+            color: var(--text-main); 
+            font-family: 'Inter', system-ui, sans-serif; 
+        }
+
+        /* Container estilo Glass/Card Dark */
+        .content-box { 
+            background: var(--brand-card); 
+            border: 1px solid var(--border-color); 
+            border-radius: 12px; 
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5); 
+            padding: 2rem; 
+            color: var(--text-main);
+        }
+
+        /* Navbar */
+        .navbar-dark.bg-dark {
+            background-color: #000 !important; /* Mais escuro que o padrão bootstrap */
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        /* Inputs e Selects Dark */
+        .form-control, .form-select {
+            background-color: var(--input-bg);
+            border: 1px solid var(--border-color);
+            color: white;
+        }
+        .form-control:focus, .form-select:focus {
+            background-color: rgba(255, 255, 255, 0.1);
+            border-color: var(--brand-wine);
+            color: white;
+            box-shadow: 0 0 0 0.25rem rgba(227, 25, 55, 0.25);
+        }
+        .form-control::placeholder { color: #6c757d; }
+        .input-group-text {
+            background-color: var(--input-bg);
+            border-color: var(--border-color);
+            color: var(--text-muted);
+        }
+
+        /* Botões */
+        .btn-primary {
+            background-color: var(--brand-wine);
+            border-color: var(--brand-wine);
+            font-weight: 600;
+        }
+        .btn-primary:hover {
+            background-color: var(--brand-hover);
+            border-color: var(--brand-hover);
+        }
+        .btn-outline-secondary { color: var(--text-muted); border-color: var(--border-color); }
+        .btn-outline-secondary:hover { background-color: var(--brand-wine); border-color: var(--brand-wine); color: white; }
+        .btn-outline-dark { color: var(--text-main); border-color: var(--border-color); }
+        .btn-outline-dark:hover { background-color: white; color: black; }
         
-        /* CHATBOT STYLES */
-        #chat-btn { position: fixed; bottom: 20px; right: 20px; z-index: 1000; width: 60px; height: 60px; border-radius: 50%; font-size: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
-        #chat-window { position: fixed; bottom: 90px; right: 20px; z-index: 1000; width: 350px; height: 450px; display: none; flex-direction: column; border: none; border-radius: 15px; overflow: hidden; box-shadow: 0 5px 25px rgba(0,0,0,0.2); }
-        .chat-header { background: #0d6efd; color: white; padding: 15px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
-        .chat-body { flex: 1; background: #fff; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; font-size: 0.9rem; }
-        .chat-footer { padding: 10px; background: #f8f9fa; border-top: 1px solid #eee; display: flex; gap: 5px; }
+        /* Listas e Cards Internos */
+        .card-item { 
+            transition: all 0.2s; 
+            border-bottom: 1px solid var(--border-color) !important; 
+            color: var(--text-main);
+        }
+        .card-item:hover { background-color: rgba(255,255,255,0.03); }
+        
+        /* Badges */
+        .badge-cat { font-size: 0.75rem; background-color: rgba(255,255,255,0.1); color: var(--text-main); border-radius: 4px; padding: 2px 6px; }
+        .badge-sku { font-size: 0.7rem; color: var(--text-muted); font-family: monospace; }
+        
+        /* Textos e Utilitários Bootstrap Override */
+        .text-muted { color: var(--text-muted) !important; }
+        .text-secondary { color: #adb5bd !important; }
+        .bg-light { background-color: rgba(255,255,255,0.05) !important; border-bottom: 1px solid var(--border-color); }
+        .border-bottom { border-bottom-color: var(--border-color) !important; }
+
+        /* CHATBOT STYLES (Dark Theme) */
+        #chat-btn { 
+            background-color: var(--brand-wine); 
+            border-color: var(--brand-wine);
+            position: fixed; bottom: 20px; right: 20px; z-index: 1000; width: 60px; height: 60px; border-radius: 50%; font-size: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); 
+        }
+        #chat-window { 
+            background-color: var(--brand-card);
+            position: fixed; bottom: 90px; right: 20px; z-index: 1000; width: 350px; height: 450px; display: none; flex-direction: column; border: 1px solid var(--border-color); border-radius: 15px; overflow: hidden; box-shadow: 0 5px 25px rgba(0,0,0,0.5); 
+        }
+        .chat-header { 
+            background: var(--brand-wine); 
+            color: white; padding: 15px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; 
+        }
+        .chat-body { 
+            flex: 1; background: var(--brand-card); padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; font-size: 0.9rem; 
+        }
+        .chat-footer { 
+            padding: 10px; background: rgba(0,0,0,0.2); border-top: 1px solid var(--border-color); display: flex; gap: 5px; 
+        }
+        
+        /* Balões de Chat */
         .msg { padding: 8px 12px; border-radius: 12px; max-width: 80%; }
-        .msg-user { background: #e9ecef; align-self: flex-end; border-bottom-right-radius: 2px; }
-        .msg-ai { background: #e3f2fd; color: #0d6efd; align-self: flex-start; border-bottom-left-radius: 2px; }
-        .typing { font-size: 0.8rem; color: #aaa; font-style: italic; display: none; margin-left: 10px; }
+        .msg-user { 
+            background: #333; 
+            color: white; 
+            align-self: flex-end; border-bottom-right-radius: 2px; 
+        }
+        .msg-ai { 
+            background: rgba(227, 25, 55, 0.15); /* Tint de vinho bem leve */
+            color: #ffb3b3; 
+            border: 1px solid rgba(227, 25, 55, 0.3);
+            align-self: flex-start; border-bottom-left-radius: 2px; 
+        }
+        .typing { font-size: 0.8rem; color: #777; font-style: italic; display: none; margin-left: 10px; }
+        
+        /* Scrollbar Dark */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: var(--brand-dark); }
+        ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--brand-wine); }
     </style>
 </head>
 <body>
 
     {% if view_mode == 'login' %}
     <div class="container d-flex align-items-center justify-content-center" style="height: 100vh;">
-        <div class="content-box text-center" style="width: 100%; max-width: 400px;">
-            <i class="bi bi-shield-lock-fill text-primary mb-3" style="font-size: 3rem;"></i>
-            <h3 class="fw-bold mb-4">Acesso Restrito</h3>
-            {% if erro %}<div class="alert alert-danger py-2 small">{{ erro }}</div>{% endif %}
+        <div class="content-box text-center" style="width: 100%; max-width: 400px; border-top: 4px solid var(--brand-wine);">
+            <i class="bi bi-shield-lock-fill mb-3" style="font-size: 3rem; color: var(--brand-wine);"></i>
+            <h3 class="fw-bold mb-4 text-white">Acesso Restrito</h3>
+            {% if erro %}<div class="alert alert-danger py-2 small bg-danger bg-opacity-25 text-danger border-danger border-opacity-25">{{ erro }}</div>{% endif %}
             <form method="POST">
                 <input type="email" name="login_email" class="form-control mb-3" placeholder="E-mail Corporativo" required>
                 <input type="password" name="login_password" class="form-control mb-4" placeholder="Senha" required>
-                <button type="submit" class="btn btn-primary w-100 py-2 fw-bold">ACESSAR SISTEMA</button>
+                <button type="submit" class="btn btn-primary w-100 py-2 fw-bold shadow-lg">ACESSAR SISTEMA</button>
             </form>
         </div>
     </div>
@@ -45,10 +157,10 @@
     {% elif view_mode == 'dashboard' %}
     <nav class="navbar navbar-dark bg-dark mb-4">
         <div class="container">
-            <span class="navbar-brand fw-bold">EloStock <span class="badge bg-secondary ms-2" style="font-size: 0.7em">{{ role }}</span></span>
+            <span class="navbar-brand fw-bold">EloStock <span class="badge bg-secondary ms-2" style="font-size: 0.7em; background-color: var(--brand-wine) !important;">{{ role }}</span></span>
             <div class="d-flex align-items-center gap-3">
                 <span class="text-white small d-none d-md-block">{{ user }}</span>
-                <a href="/elostock/logout" class="btn btn-outline-secondary btn-sm text-white">Sair</a>
+                <a href="/elostock/logout" class="btn btn-outline-secondary btn-sm">Sair</a>
             </div>
         </div>
     </nav>
@@ -59,7 +171,7 @@
             <form action="/elostock/dashboard" method="GET" class="row g-3 align-items-center">
                 <div class="col-md-6">
                     <div class="input-group">
-                        <span class="input-group-text bg-light"><i class="bi bi-search"></i></span>
+                        <span class="input-group-text"><i class="bi bi-search"></i></span>
                         <input type="text" name="q" class="form-control" placeholder="Buscar por Nome ou SKU..." value="{{ search_query }}">
                     </div>
                 </div>
@@ -80,14 +192,14 @@
             {% if produtos|length > 0 or role == 'ADMINISTRATOR' and amostras|length == 0 %}
             <div class="{{ 'col-12' if amostras|length == 0 else 'col-lg-5' }}">
                 <div class="content-box p-0 h-100">
-                    <div class="p-3 border-bottom bg-light rounded-top d-flex justify-content-between">
-                        <h6 class="mb-0 fw-bold text-secondary">📦 Almoxarifado</h6>
+                    <div class="p-3 border-bottom bg-light rounded-top d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0 fw-bold text-white">📦 Almoxarifado</h6>
                         <span class="badge bg-secondary">{{ produtos|length }} itens</span>
                     </div>
                     <div class="p-3">
                         {% for p in produtos %}
                         {% set critico = p.quantidade <= (p.estoque_minimo or 0) %}
-                        <div class="card-item py-3 d-flex justify-content-between align-items-center {{ 'bg-danger-subtle px-2 rounded' if critico else '' }}">
+                        <div class="card-item py-3 d-flex justify-content-between align-items-center {{ 'rounded px-2' if critico else '' }}" style="{{ 'background-color: rgba(220, 53, 69, 0.15); border-bottom: none !important;' if critico else '' }}">
                             <div style="max-width: 70%;">
                                 <div class="fw-bold">{{ p.nome }}</div>
                                 <div class="d-flex gap-2 mt-1">
@@ -97,8 +209,8 @@
                                 <small class="text-muted d-block mt-1">{{ p.localizacao }}</small>
                             </div>
                             <div class="text-end">
-                                <div class="h5 mb-0 fw-bold">{{ p.quantidade }}</div>
-                                <a href="/elostock/acao/produto/{{ p.id }}" class="btn btn-link btn-sm p-0 text-decoration-none">Retirar</a>
+                                <div class="h5 mb-0 fw-bold text-white">{{ p.quantidade }}</div>
+                                <a href="/elostock/acao/produto/{{ p.id }}" class="btn btn-link btn-sm p-0 text-decoration-none" style="color: var(--brand-wine);">Retirar</a>
                             </div>
                         </div>
                         {% else %}
@@ -112,8 +224,8 @@
             {% if amostras|length > 0 or role == 'ADMINISTRATOR' and produtos|length == 0 %}
             <div class="{{ 'col-12' if produtos|length == 0 else 'col-lg-7' }}">
                 <div class="content-box p-0 h-100">
-                    <div class="p-3 border-bottom bg-light rounded-top d-flex justify-content-between">
-                        <h6 class="mb-0 fw-bold text-secondary">💎 Showroom & Logística</h6>
+                    <div class="p-3 border-bottom bg-light rounded-top d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0 fw-bold text-white">💎 Showroom & Logística</h6>
                         <span class="badge bg-secondary">{{ amostras|length }} peças</span>
                     </div>
                     <div class="p-3">
@@ -129,23 +241,23 @@
                                     <small class="text-muted">PAT: {{ a.codigo_patrimonio or 'S/N' }}</small>
                                 </div>
                                 {% if a.status == 'DISPONIVEL' %}
-                                    <span class="badge bg-success bg-opacity-10 text-success border border-success">Disponível</span>
+                                    <span class="badge bg-success bg-opacity-10 text-success border border-success border-opacity-25">Disponível</span>
                                 {% else %}
-                                    <span class="badge bg-warning bg-opacity-10 text-warning border border-warning text-dark">Em Rua</span>
+                                    <span class="badge bg-warning bg-opacity-10 text-warning border border-warning border-opacity-25">Em Rua</span>
                                 {% endif %}
                             </div>
                             {% if a.status == 'DISPONIVEL' %}
                                 <div class="small text-muted mt-2"><i class="bi bi-geo-alt-fill me-1"></i> Local: {{ a.local_fisico or 'Não definido' }}</div>
                             {% else %}
-                                <div class="bg-light p-2 rounded mt-2 border">
+                                <div class="bg-dark p-2 rounded mt-2 border border-secondary border-opacity-25">
                                     <div class="d-flex justify-content-between small mb-1">
-                                        <span><strong>Resp:</strong> {{ a.vendedor_responsavel }}</span>
+                                        <span class="text-light"><strong>Resp:</strong> {{ a.vendedor_responsavel }}</span>
                                         <span class="text-danger fw-bold">Volta: {{ a.data_prevista_retorno.strftime('%d/%m') if a.data_prevista_retorno else '?' }}</span>
                                     </div>
-                                    <div class="small text-muted pt-1"><i class="bi bi-truck me-1"></i> Destino: <strong>{{ a.cliente_destino or 'Não inf.' }}</strong></div>
+                                    <div class="small text-muted pt-1"><i class="bi bi-truck me-1"></i> Destino: <strong class="text-light">{{ a.cliente_destino or 'Não inf.' }}</strong></div>
                                 </div>
                             {% endif %}
-                            <a href="/elostock/acao/amostra/{{ a.id }}" class="btn btn-outline-dark btn-sm w-100 mt-2 rounded-pill">Gerenciar</a>
+                            <a href="/elostock/acao/amostra/{{ a.id }}" class="btn btn-outline-dark btn-sm w-100 mt-2 rounded-pill" style="border-color: rgba(255,255,255,0.2); color: #ccc;">Gerenciar</a>
                         </div>
                         {% else %}
                             <div class="p-4 text-center text-muted">Acesso restrito ou nenhuma amostra.</div>
@@ -226,20 +338,20 @@
             {% if msg %}
                 <div class="text-center">
                     <div class="text-success mb-3"><i class="bi bi-check-circle-fill fs-1"></i></div>
-                    <h4>Sucesso!</h4>
+                    <h4 class="text-white">Sucesso!</h4>
                     <p class="text-muted">{{ msg }}</p>
-                    <a href="/elostock/dashboard" class="btn btn-dark w-100">Voltar</a>
+                    <a href="/elostock/dashboard" class="btn btn-outline-secondary w-100">Voltar</a>
                 </div>
             {% else %}
                 <h5 class="text-secondary small text-uppercase mb-1">Gerenciando</h5>
-                <h2 class="fw-bold mb-4">{{ item.nome }}</h2>
+                <h2 class="fw-bold mb-4 text-white">{{ item.nome }}</h2>
                 <form method="POST">
                     {% if tipo == 'produto' %}
                         <div class="text-center mb-4">
-                            <span class="display-5 fw-bold text-primary">{{ item.quantidade }}</span>
+                            <span class="display-5 fw-bold text-white">{{ item.quantidade }}</span>
                             <span class="text-muted d-block">em estoque</span>
                         </div>
-                        <label class="fw-bold">Qtd Retirada</label>
+                        <label class="fw-bold text-white">Qtd Retirada</label>
                         <input type="number" name="qtd" class="form-control mb-3" value="1" min="1" max="{{ item.quantidade }}">
                         <button type="submit" class="btn btn-primary w-100 py-2">Confirmar</button>
                     {% else %}
@@ -260,9 +372,9 @@
                                 </select>
                             </div>
                             <input type="hidden" name="acao_amostra" value="retirar">
-                            <button type="submit" class="btn btn-warning w-100 fw-bold py-2">Registrar Saída</button>
+                            <button type="submit" class="btn btn-warning w-100 fw-bold py-2 text-dark">Registrar Saída</button>
                         {% else %}
-                            <div class="alert alert-warning text-center">Responsável: {{ item.vendedor_responsavel }}</div>
+                            <div class="alert alert-warning text-center bg-warning bg-opacity-10 border-warning border-opacity-25 text-warning">Responsável: {{ item.vendedor_responsavel }}</div>
                             <input type="hidden" name="acao_amostra" value="devolver">
                             <button type="submit" class="btn btn-success w-100 fw-bold py-2">Registrar Devolução</button>
                         {% endif %}
