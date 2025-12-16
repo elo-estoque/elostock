@@ -1,10 +1,16 @@
+import warnings
+# --- FORÇA BRUTA PARA SILENCIAR AVISOS ---
+# Isso deve limpar o log para vermos o erro real
+warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.simplefilter(action='ignore', category=UserWarning)
+
 import os
 import logging
+import traceback # Importante para ver o erro real
 from datetime import datetime, timedelta
 import requests
 import urllib3
 import json
-import warnings # Adicionado para tratar compatibilidade
 from flask import Flask, request, render_template, session, redirect, url_for, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import or_
@@ -13,13 +19,8 @@ from slack_bolt.adapter.flask import SlackRequestHandler
 import google.generativeai as genai
 from google.generativeai.types import FunctionDeclaration, Tool
 
-# --- ESQUEMA DE COMPATIBILIDADE (CORREÇÃO DO LOG VERMELHO) ---
-# Ignora avisos de versão antiga do Python e SSL
-warnings.filterwarnings("ignore", category=FutureWarning)
-warnings.filterwarnings("ignore", category=UserWarning)
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 # --- CONFIGURAÇÃO ---
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "chave_padrao_segura")
 
@@ -33,6 +34,14 @@ DIRECTUS_URL = os.environ.get("DIRECTUS_URL")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
+
+# --- VERIFICAÇÃO DE DEBUG (OLHE NO LOG AO INICIAR) ---
+print("--- INICIANDO VERIFICAÇÃO ---", flush=True)
+if not GEMINI_API_KEY:
+    print("❌ ERRO CRÍTICO: GEMINI_API_KEY não foi encontrada nas variáveis de ambiente!", flush=True)
+else:
+    print(f"✅ GEMINI_API_KEY encontrada (tamanho: {len(GEMINI_API_KEY)})", flush=True)
+print("-----------------------------", flush=True)
 
 # Configuração Slack
 slack_app = None
@@ -83,7 +92,6 @@ class Log(db.Model):
 # --- FUNÇÕES PARA A IA (TOOLS) ---
 
 def api_alterar_estoque(nome_ou_sku, quantidade, usuario):
-    """Altera o estoque de um produto (soma ou subtrai)."""
     with app.app_context():
         produto = Produto.query.filter(or_(
             Produto.nome.ilike(f'%{nome_ou_sku}%'),
@@ -99,7 +107,6 @@ def api_alterar_estoque(nome_ou_sku, quantidade, usuario):
 
         produto.quantidade = nova_qtd
         
-        # LOG COM O NOME DO USUÁRIO
         acao_log = 'CHAT_ENTRADA' if int(quantidade) > 0 else 'CHAT_SAIDA'
         db.session.add(Log(
             tipo_item='produto', 
@@ -112,7 +119,6 @@ def api_alterar_estoque(nome_ou_sku, quantidade, usuario):
         return f"Sucesso! Estoque de {produto.nome} atualizado para {produto.quantidade}. (Ação registrada para {usuario})"
 
 def api_movimentar_amostra(nome_ou_pat, acao, cliente_destino, usuario):
-    """Movimenta uma amostra (Retirar ou Devolver). Acao deve ser 'retirar' ou 'devolver'."""
     with app.app_context():
         amostra = Amostra.query.filter(or_(
             Amostra.nome.ilike(f'%{nome_ou_pat}%'),
@@ -152,13 +158,10 @@ def api_movimentar_amostra(nome_ou_pat, acao, cliente_destino, usuario):
         return f"Feito! Amostra {amostra.nome} agora está {amostra.status}."
 
 def api_consultar(termo):
-    """Consulta informações gerais de produtos ou amostras."""
     with app.app_context():
-        # Busca Produto
         p = Produto.query.filter(Produto.nome.ilike(f'%{termo}%')).first()
         res_p = f"Produto: {p.nome} | Qtd: {p.quantidade} | Local: {p.localizacao}" if p else ""
         
-        # Busca Amostra
         a = Amostra.query.filter(Amostra.nome.ilike(f'%{termo}%')).first()
         status_a = f"Com {a.vendedor_responsavel}" if a and a.status != 'DISPONIVEL' else "Disponível"
         res_a = f"Amostra: {a.nome} | Status: {status_a}" if a else ""
@@ -166,10 +169,14 @@ def api_consultar(termo):
         if not p and not a: return "Não encontrei nada com esse nome."
         return f"{res_p}\n{res_a}"
 
-# Configuração do Gemini com Tools
 tools_gemini = [api_alterar_estoque, api_movimentar_amostra, api_consultar]
+
+# Só configura se tiver chave, senão vai dar erro na rota
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        print(f"Erro ao configurar GENAI: {e}", flush=True)
 
 # --- ROTAS ---
 
@@ -219,7 +226,6 @@ def index():
 @app.route('/elostock/dashboard')
 def dashboard():
     if 'user_email' not in session: return redirect('/elostock/')
-    
     role = session.get('user_role', 'PUBLIC')
     search_query = request.args.get('q', '').strip()
     filter_cat = request.args.get('cat', '').strip()
@@ -239,7 +245,6 @@ def dashboard():
         if filter_cat:
             query = query.filter(Produto.categoria_produtos == filter_cat)
         produtos = query.order_by(Produto.nome).all()
-        
         cats = db.session.query(Produto.categoria_produtos).distinct().all()
         for c in cats:
             if c.categoria_produtos: categorias_disponiveis.add(c.categoria_produtos)
@@ -251,7 +256,6 @@ def dashboard():
         if filter_cat:
             query = query.filter(Amostra.categoria_amostra == filter_cat)
         amostras = query.order_by(Amostra.status.desc(), Amostra.nome).all()
-
         cats = db.session.query(Amostra.categoria_amostra).distinct().all()
         for c in cats:
             if c.categoria_amostra: categorias_disponiveis.add(c.categoria_amostra)
@@ -265,7 +269,7 @@ def dashboard():
                            user=session['user_email'],
                            role=role) 
 
-# --- ROTA API CHAT (ATUALIZADA E ESTABILIZADA) ---
+# --- ROTA API CHAT COM DEBUG ---
 @app.route('/elostock/api/chat', methods=['POST'])
 def api_chat():
     if 'user_email' not in session:
@@ -275,26 +279,29 @@ def api_chat():
     user_msg = data.get('message')
     usuario_atual = session['user_email']
 
+    if not GEMINI_API_KEY:
+         return jsonify({"response": "ERRO: GEMINI_API_KEY não configurada no servidor."})
+
     try:
-        # Configuração para evitar alucinações e erros de modelo
         generation_config = {
-            "temperature": 0.4,       # Baixa criatividade para garantir precisão
+            "temperature": 0.4, 
             "top_p": 0.95,
             "top_k": 40,
             "max_output_tokens": 1024,
             "response_mime_type": "text/plain",
         }
 
-        # Instancia o modelo com a configuração robusta
         model = genai.GenerativeModel(
             model_name='gemini-1.5-flash', 
             tools=tools_gemini,
             generation_config=generation_config
         )
 
+        # Adicionando print para ver se chega aqui
+        print(f"DEBUG: Iniciando chat para {usuario_atual} msg: {user_msg}", flush=True)
+
         chat = model.start_chat(enable_automatic_function_calling=True)
         
-        # Injetamos o contexto do usuário na mensagem do sistema
         prompt_sistema = f"""
         Você é o assistente do EloStock. O usuário atual é: {usuario_atual}.
         SEMPRE que chamar uma função de alterar ou movimentar, passe '{usuario_atual}' no argumento 'usuario'.
@@ -306,15 +313,19 @@ def api_chat():
         return jsonify({"response": response.text})
 
     except Exception as e:
-        print(f"Erro Chat: {e}")
-        return jsonify({"response": "Desculpe, tive um erro interno ao processar seu pedido (consulte o log)."})
+        # AQUI ESTÁ O PULO DO GATO:
+        # Vamos pegar o erro completo e jogar na tela e no log
+        erro_bruto = traceback.format_exc()
+        print(f"❌ ERRO GRAVE NO CHAT: {erro_bruto}", flush=True)
+        
+        # Retorna o erro na tela para você ver
+        return jsonify({"response": f"ERRO TÉCNICO: {str(e)}"})
 
 @app.route('/elostock/acao/<tipo>/<int:id>', methods=['GET', 'POST'])
 def acao(tipo, id):
     if 'user_email' not in session: return redirect('/elostock/')
     
     role = session.get('user_role', 'PUBLIC')
-    # Validacoes de seguranca mantidas...
     if tipo == 'produto' and role == 'VENDAS': return "⛔ Acesso Negado"
     if tipo == 'amostra' and role == 'COMPRAS': return "⛔ Acesso Negado"
 
