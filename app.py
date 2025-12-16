@@ -6,6 +6,7 @@ import requests
 import urllib3
 from flask import Flask, request, render_template, session, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import or_
 from slack_bolt import App as BoltApp
 from slack_bolt.adapter.flask import SlackRequestHandler
 import google.generativeai as genai
@@ -38,14 +39,18 @@ if SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET:
     except Exception as e:
         print(f"⚠️ Slack não configurado: {e}")
 
-# --- MODELOS ---
+# --- MODELOS ATUALIZADOS ---
 class Produto(db.Model):
     __tablename__ = 'produtos'
     id = db.Column(db.Integer, primary_key=True)
+    status = db.Column(db.String(50)) # Opcional, dependendo do seu Directus
     nome = db.Column(db.String(150))
     quantidade = db.Column(db.Integer)
     localizacao = db.Column(db.String(50))
     estoque_minimo = db.Column(db.Integer, default=5)
+    # Novos campos solicitados
+    sku_produtos = db.Column(db.String(100))
+    categoria_produtos = db.Column(db.String(100))
 
 class Amostra(db.Model):
     __tablename__ = 'amostras'
@@ -59,6 +64,9 @@ class Amostra(db.Model):
     logradouro = db.Column(db.String(255))
     data_saida = db.Column(db.DateTime)
     data_prevista_retorno = db.Column(db.DateTime)
+    # Novos campos solicitados
+    sku_amostras = db.Column(db.String(100))
+    categoria_amostra = db.Column(db.String(100))
 
 class Log(db.Model):
     __tablename__ = 'logs_movimentacao'
@@ -98,7 +106,6 @@ if GEMINI_API_KEY:
 
 # --- ROTAS ---
 
-# Alteração: Rota base agora inclui /elostock/
 @app.route('/elostock/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST' and 'login_email' in request.form:
@@ -134,7 +141,6 @@ def index():
                 else:
                     session['user_role'] = 'PUBLIC'
                 
-                # Alteração: Redireciona para /elostock/dashboard
                 return redirect('/elostock/dashboard')
             
             return render_template('index.html', view_mode='login', erro="Credenciais inválidas.")
@@ -142,39 +148,86 @@ def index():
             return render_template('index.html', view_mode='login', erro=f"Erro de Conexão: {str(e)}")
 
     if 'user_email' in session: 
-        # Alteração: Redireciona para /elostock/dashboard
         return redirect('/elostock/dashboard')
     return render_template('index.html', view_mode='login')
 
-# Alteração: Rota dashboard agora inclui /elostock
 @app.route('/elostock/dashboard')
 def dashboard():
-    # Alteração: Se não estiver logado, vai para /elostock/
     if 'user_email' not in session: return redirect('/elostock/')
     
     role = session.get('user_role', 'PUBLIC')
     
+    # Captura parâmetros de busca e filtro
+    search_query = request.args.get('q', '').strip()
+    filter_cat = request.args.get('cat', '').strip()
+    
     produtos = []
     amostras = []
+    categorias_disponiveis = set() # Usar um set para evitar duplicatas
     
     # Lógica de Permissão
     ver_tudo = role == 'ADMINISTRATOR'
     ver_compras = role == 'COMPRAS' or ver_tudo
     ver_vendas = role == 'VENDAS' or ver_tudo
     
+    # --- QUERY PRODUTOS ---
     if ver_compras:
-        produtos = Produto.query.order_by(Produto.nome).all()
+        query_p = Produto.query
         
+        # Filtro de Busca (Nome OU SKU)
+        if search_query:
+            query_p = query_p.filter(
+                or_(
+                    Produto.nome.ilike(f'%{search_query}%'),
+                    Produto.sku_produtos.ilike(f'%{search_query}%')
+                )
+            )
+        # Filtro de Categoria
+        if filter_cat:
+            query_p = query_p.filter(Produto.categoria_produtos == filter_cat)
+            
+        produtos = query_p.order_by(Produto.nome).all()
+
+        # Coletar categorias para o dropdown
+        todos_prods = Produto.query.with_entities(Produto.categoria_produtos).distinct().all()
+        for c in todos_prods:
+            if c.categoria_produtos: categorias_disponiveis.add(c.categoria_produtos)
+        
+    # --- QUERY AMOSTRAS ---
     if ver_vendas:
-        amostras = Amostra.query.order_by(Amostra.status.desc(), Amostra.nome).all()
+        query_a = Amostra.query
+        
+        # Filtro de Busca (Nome OU SKU)
+        if search_query:
+            query_a = query_a.filter(
+                or_(
+                    Amostra.nome.ilike(f'%{search_query}%'),
+                    Amostra.sku_amostras.ilike(f'%{search_query}%')
+                )
+            )
+        # Filtro de Categoria
+        if filter_cat:
+            query_a = query_a.filter(Amostra.categoria_amostra == filter_cat)
+            
+        amostras = query_a.order_by(Amostra.status.desc(), Amostra.nome).all()
+
+        # Coletar categorias para o dropdown
+        todas_amos = Amostra.query.with_entities(Amostra.categoria_amostra).distinct().all()
+        for c in todas_amos:
+            if c.categoria_amostra: categorias_disponiveis.add(c.categoria_amostra)
     
+    # Ordenar categorias alfabeticamente
+    categorias_sorted = sorted(list(categorias_disponiveis))
+
     return render_template('index.html', view_mode='dashboard', 
                            produtos=produtos, 
                            amostras=amostras, 
+                           categorias=categorias_sorted,
+                           search_query=search_query,
+                           selected_cat=filter_cat,
                            user=session['user_email'],
                            role=role) 
 
-# Alteração: Rota acao agora inclui /elostock
 @app.route('/elostock/acao/<tipo>/<int:id>', methods=['GET', 'POST'])
 def acao(tipo, id):
     if 'user_email' not in session: return redirect('/elostock/')
@@ -221,16 +274,13 @@ def acao(tipo, id):
 
     return render_template('index.html', view_mode='acao', item=item, tipo=tipo, msg=msg_sucesso)
 
-# Alteração: Rota logout agora inclui /elostock
 @app.route('/elostock/logout')
 def logout():
     session.clear()
-    # Alteração: Redireciona para a raiz /elostock/
     return redirect('/elostock/')
 
 # --- SLACK ---
 if slack_app:
-    # Alteração: Rota Slack também precisa do prefixo se o Traefik só manda /elostock
     @app.route("/elostock/slack/events", methods=["POST"])
     def slack_events(): return handler.handle(request)
 
