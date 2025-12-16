@@ -6,6 +6,7 @@ warnings.simplefilter(action='ignore', category=UserWarning)
 import os
 import logging
 import traceback 
+import difflib # Biblioteca para comparação inteligente de texto
 from datetime import datetime, timedelta
 import requests
 import urllib3
@@ -80,37 +81,87 @@ class Log(db.Model):
     usuario_nome = db.Column(db.String(100))
     data_evento = db.Column(db.DateTime, default=datetime.now)
 
-# --- FUNÇÕES PARA A IA (TOOLS) ---
+# --- FUNÇÃO DE BUSCA INTELIGENTE (Fuzzy Match) ---
+def encontrar_produto_inteligente(termo_busca):
+    """
+    Tenta encontrar um produto usando:
+    1. Busca exata (SQL ILIKE)
+    2. Busca singular (remove 's' final)
+    3. Busca por similaridade (difflib)
+    Retorna (produto_obj, mensagem_explicativa) ou (None, erro)
+    """
+    termo_limpo = termo_busca.strip()
+    
+    # 1. Tentativa SQL Padrão (Nome ou SKU)
+    produto = Produto.query.filter(or_(
+        Produto.nome.ilike(f'%{termo_limpo}%'),
+        Produto.sku_produtos.ilike(f'%{termo_limpo}%')
+    )).first()
+    
+    if produto:
+        return produto, None # Encontrou direto
+
+    # 2. Tentativa Singular (Se for plural "cadernos" -> "caderno")
+    if termo_limpo.lower().endswith('s'):
+        termo_singular = termo_limpo[:-1]
+        produto = Produto.query.filter(Produto.nome.ilike(f'%{termo_singular}%')).first()
+        if produto:
+            return produto, f"(Assumi que '{termo_limpo}' era '{produto.nome}')"
+
+    # 3. Tentativa Fuzzy (Similaridade) - A "Mágica"
+    todos_produtos = db.session.query(Produto.id, Produto.nome).all()
+    nomes_db = [p.nome for p in todos_produtos]
+    
+    # Busca o nome mais parecido (cutoff 0.6 significa 60% de semelhança mínima)
+    matches = difflib.get_close_matches(termo_limpo, nomes_db, n=1, cutoff=0.5)
+    
+    if matches:
+        nome_encontrado = matches[0]
+        produto = Produto.query.filter_by(nome=nome_encontrado).first()
+        return produto, f"(Não achei '{termo_limpo}', mas encontrei '{nome_encontrado}'. Usei esse.)"
+        
+    return None, f"Não encontrei nada parecido com '{termo_busca}'."
+
+# --- TOOLS DO GEMINI ---
 
 def api_alterar_estoque(nome_ou_sku, quantidade, usuario):
     with app.app_context():
-        produto = Produto.query.filter(or_(
-            Produto.nome.ilike(f'%{nome_ou_sku}%'),
-            Produto.sku_produtos.ilike(f'%{nome_ou_sku}%')
-        )).first()
+        # Usa a busca inteligente agora
+        produto, msg_extra = encontrar_produto_inteligente(nome_ou_sku)
         
         if not produto:
-            return f"Erro: Não encontrei nenhum produto com o nome ou SKU '{nome_ou_sku}'."
+            return msg_extra # Retorna o erro de não encontrado
         
-        nova_qtd = produto.quantidade + int(quantidade)
+        try:
+            qtd_int = int(quantidade)
+        except:
+            return "Erro: Quantidade inválida."
+
+        nova_qtd = produto.quantidade + qtd_int
         if nova_qtd < 0:
-             return f"Erro: O produto {produto.nome} só tem {produto.quantidade} unidades. Não dá para retirar {abs(int(quantidade))}."
+             return f"Erro: O produto {produto.nome} só tem {produto.quantidade} unidades. Não dá para retirar {abs(qtd_int)}."
 
         produto.quantidade = nova_qtd
         
-        acao_log = 'CHAT_ENTRADA' if int(quantidade) > 0 else 'CHAT_SAIDA'
+        acao_log = 'CHAT_ENTRADA' if qtd_int > 0 else 'CHAT_SAIDA'
         db.session.add(Log(
             tipo_item='produto', 
             item_id=produto.id, 
             acao=acao_log, 
-            quantidade=abs(int(quantidade)), 
+            quantidade=abs(qtd_int), 
             usuario_nome=usuario
         ))
         db.session.commit()
-        return f"Sucesso! Estoque de {produto.nome} atualizado para {produto.quantidade}. (Ação registrada para {usuario})"
+        
+        feedback = f"Sucesso! Estoque de {produto.nome} foi para {produto.quantidade}."
+        if msg_extra:
+            feedback += f" {msg_extra}"
+            
+        return feedback
 
 def api_movimentar_amostra(nome_ou_pat, acao, cliente_destino, usuario):
     with app.app_context():
+        # Busca Amostra (Lógica simples por enquanto, pode aplicar fuzzy aqui tbm se quiser)
         amostra = Amostra.query.filter(or_(
             Amostra.nome.ilike(f'%{nome_ou_pat}%'),
             Amostra.codigo_patrimonio.ilike(f'%{nome_ou_pat}%'),
@@ -118,7 +169,14 @@ def api_movimentar_amostra(nome_ou_pat, acao, cliente_destino, usuario):
         )).first()
 
         if not amostra:
-            return f"Erro: Amostra '{nome_ou_pat}' não encontrada."
+            # Tenta Fuzzy para amostra também
+            todas = db.session.query(Amostra.nome).all()
+            nomes = [a.nome for a in todas]
+            matches = difflib.get_close_matches(nome_ou_pat, nomes, n=1, cutoff=0.6)
+            if matches:
+                amostra = Amostra.query.filter_by(nome=matches[0]).first()
+            else:
+                return f"Erro: Amostra '{nome_ou_pat}' não encontrada."
 
         if acao.lower() == 'retirar':
             if amostra.status != 'DISPONIVEL':
@@ -150,14 +208,21 @@ def api_movimentar_amostra(nome_ou_pat, acao, cliente_destino, usuario):
 
 def api_consultar(termo):
     with app.app_context():
-        p = Produto.query.filter(Produto.nome.ilike(f'%{termo}%')).first()
+        # Busca Produto Inteligente
+        p, _ = encontrar_produto_inteligente(termo)
         res_p = f"Produto: {p.nome} | Qtd: {p.quantidade} | Local: {p.localizacao}" if p else ""
         
+        # Busca Amostra (Simples)
         a = Amostra.query.filter(Amostra.nome.ilike(f'%{termo}%')).first()
+        if not a: # Fuzzy fallback
+            todos = [x.nome for x in db.session.query(Amostra.nome).all()]
+            match = difflib.get_close_matches(termo, todos, n=1, cutoff=0.6)
+            if match: a = Amostra.query.filter_by(nome=match[0]).first()
+
         status_a = f"Com {a.vendedor_responsavel}" if a and a.status != 'DISPONIVEL' else "Disponível"
         res_a = f"Amostra: {a.nome} | Status: {status_a}" if a else ""
         
-        if not p and not a: return "Não encontrei nada com esse nome."
+        if not p and not a: return "Não encontrei nada parecido no estoque nem nas amostras."
         return f"{res_p}\n{res_a}"
 
 tools_gemini = [api_alterar_estoque, api_movimentar_amostra, api_consultar]
@@ -188,6 +253,7 @@ def index():
                 token = resp.json()['data']['access_token']
                 session['user_token'] = token
                 session['user_email'] = email
+                session['chat_history'] = [] # Inicia histórico vazio
                 
                 headers = {"Authorization": f"Bearer {token}"}
                 user_info = requests.get(
@@ -259,7 +325,7 @@ def dashboard():
                            user=session['user_email'],
                            role=role) 
 
-# --- ROTA API CHAT COM AUTO-DETECÇÃO DE MODELO ---
+# --- ROTA API CHAT COM LÓGICA REFINADA ---
 @app.route('/elostock/api/chat', methods=['POST'])
 def api_chat():
     if 'user_email' not in session:
@@ -269,76 +335,79 @@ def api_chat():
     user_msg = data.get('message')
     usuario_atual = session['user_email']
 
+    # Gerencia histórico simples na sessão
+    historico = session.get('chat_history', [])
+    
+    # Limita histórico para não estourar a sessão (últimas 6 mensagens)
+    if len(historico) > 6:
+        historico = historico[-6:]
+
     if not GEMINI_API_KEY:
          return jsonify({"response": "ERRO: GEMINI_API_KEY não configurada no servidor."})
 
     try:
-        # --- LÓGICA DE AUTO-SELEÇÃO DE MODELO ---
-        # 1. Lista todos os modelos disponíveis para sua chave
+        # 1. Detecta modelos (mantido para garantir compatibilidade)
         modelos_disponiveis = []
         try:
             for m in genai.list_models():
                 if 'generateContent' in m.supported_generation_methods:
                     modelos_disponiveis.append(m.name)
-            
-            print(f"DEBUG: Modelos Disponíveis: {modelos_disponiveis}", flush=True)
-            
-            if not modelos_disponiveis:
-                return jsonify({"response": "ERRO: A API do Google conectou, mas disse que não há modelos disponíveis para sua chave."})
+        except:
+            pass # Se falhar a listagem, tenta hardcoded abaixo
 
-        except Exception as e_list:
-            print(f"ERRO AO LISTAR MODELOS: {e_list}", flush=True)
-            return jsonify({"response": f"Erro de conexão com Google: {str(e_list)}"})
-
-        # 2. Escolhe o melhor (Prioridade: Flash > Pro > Qualquer um)
-        modelo_escolhido = None
+        modelo_escolhido = 'models/gemini-1.5-flash' # Preferência
         
-        # Tenta achar o Flash
-        for m in modelos_disponiveis:
-            if 'flash' in m.lower():
-                modelo_escolhido = m
-                break
-        
-        # Se não achou Flash, tenta Pro
-        if not modelo_escolhido:
-            for m in modelos_disponiveis:
-                if 'pro' in m.lower():
-                    modelo_escolhido = m
-                    break
-        
-        # Se não achou nenhum específico, pega o primeiro da lista
-        if not modelo_escolhido:
-            modelo_escolhido = modelos_disponiveis[0]
+        # Tenta achar Flash ou Pro na lista real
+        if modelos_disponiveis:
+            found_flash = next((m for m in modelos_disponiveis if 'flash' in m.lower()), None)
+            found_pro = next((m for m in modelos_disponiveis if 'pro' in m.lower()), None)
+            if found_flash: modelo_escolhido = found_flash
+            elif found_pro: modelo_escolhido = found_pro
+            else: modelo_escolhido = modelos_disponiveis[0]
 
-        print(f"DEBUG: Usando o modelo: {modelo_escolhido}", flush=True)
-
-        # --- FIM DA SELEÇÃO ---
+        print(f"DEBUG: Modelo: {modelo_escolhido} | User: {usuario_atual}", flush=True)
 
         generation_config = {
-            "temperature": 0.4, 
+            "temperature": 0.3, # Mais preciso, menos criativo
             "top_p": 0.95,
             "top_k": 40,
             "max_output_tokens": 1024,
             "response_mime_type": "text/plain",
         }
 
-        # Instancia usando o nome que descobrimos dinamicamente
         model = genai.GenerativeModel(
             model_name=modelo_escolhido, 
             tools=tools_gemini,
             generation_config=generation_config
         )
 
-        chat = model.start_chat(enable_automatic_function_calling=True)
+        # Inicia chat SEMPRE com o histórico da sessão
+        # Precisamos converter o histórico simples para o formato do Gemini se quiséssemos stateful
+        # Mas para simplicidade e robustez, vamos injetar o histórico no prompt
+        
+        hist_str = "\n".join([f"{h['role']}: {h['text']}" for h in historico])
         
         prompt_sistema = f"""
-        Você é o assistente do EloStock. O usuário atual é: {usuario_atual}.
-        SEMPRE que chamar uma função de alterar ou movimentar, passe '{usuario_atual}' no argumento 'usuario'.
-        Se o usuário disser 'peguei 5', entenda como quantidade negativa (-5).
-        Se o usuário disser 'adicionei 5' ou 'chegou 5', entenda como positiva (+5).
+        Você é o assistente inteligente do EloStock. Usuário: {usuario_atual}.
+        
+        Histórico recente da conversa:
+        {hist_str}
+
+        REGRAS DE INTELEGÊNCIA:
+        1. Se o usuário pedir algo genérico como "retirei cadernos", o sistema de busca vai tentar achar o melhor produto.
+        2. Se a função retornar que atualizou um produto com nome diferente (ex: usuário disse "cadernos", sistema achou "Caderno Executivo"), INFORME ISSO CLARAMENTE ao usuário na resposta final. Diga "Entendi que você quis dizer X".
+        3. SEMPRE passe '{usuario_atual}' no argumento 'usuario' das funções.
+        4. Números: "peguei 5" = -5 (retirada). "chegou 5" = +5 (entrada).
         """
         
+        chat = model.start_chat(enable_automatic_function_calling=True)
         response = chat.send_message(f"{prompt_sistema}\nUsuário diz: {user_msg}")
+        
+        # Salva no histórico
+        historico.append({"role": "user", "text": user_msg})
+        historico.append({"role": "assistant", "text": response.text})
+        session['chat_history'] = historico
+
         return jsonify({"response": response.text})
 
     except Exception as e:
