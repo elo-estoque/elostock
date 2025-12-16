@@ -11,8 +11,9 @@
         .content-box { background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); padding: 2rem; }
         .card-item { transition: all 0.2s; border: none; border-bottom: 1px solid #eee; }
         .card-item:hover { background-color: #fcfcfc; }
+        /* Estilos novos para SKU e Categoria */
         .badge-cat { font-size: 0.75rem; background-color: #e9ecef; color: #495057; border-radius: 4px; padding: 2px 6px; }
-        .badge-sku { font-size: 0.7rem; color: #6c757d; font-family: monospace; letter-spacing: 0.5px; }
+        .badge-sku { font-size: 0.7rem; color: #6c757d; font-family: monospace; }
     </style>
 </head>
 <body>
@@ -71,7 +72,7 @@
 
         <div class="row g-4 justify-content-center">
             
-            {% if produtos|length > 0 or (role == 'ADMINISTRATOR' or role == 'COMPRAS') and amostras|length == 0 %}
+            {% if produtos|length > 0 or role == 'ADMINISTRATOR' and amostras|length == 0 %}
             <div class="{{ 'col-12' if amostras|length == 0 else 'col-lg-5' }}">
                 <div class="content-box p-0 h-100">
                     <div class="p-3 border-bottom bg-light rounded-top d-flex justify-content-between">
@@ -83,7 +84,7 @@
                         {% set critico = p.quantidade <= (p.estoque_minimo or 0) %}
                         <div class="card-item py-3 d-flex justify-content-between align-items-center {{ 'bg-danger-subtle px-2 rounded' if critico else '' }}">
                             <div style="max-width: 70%;">
-                                <div class="fw-bold text-truncate">{{ p.nome }}</div>
+                                <div class="fw-bold">{{ p.nome }}</div>
                                 <div class="d-flex gap-2 mt-1">
                                     {% if p.sku_produtos %}<span class="badge-sku"><i class="bi bi-upc-scan"></i> {{ p.sku_produtos }}</span>{% endif %}
                                     {% if p.categoria_produtos %}<span class="badge-cat">{{ p.categoria_produtos }}</span>{% endif %}
@@ -96,16 +97,14 @@
                             </div>
                         </div>
                         {% else %}
-                            <div class="p-4 text-center text-muted">
-                                {% if search_query %}Nenhum produto encontrado para "{{ search_query }}".{% else %}Sem produtos cadastrados.{% endif %}
-                            </div>
+                            <div class="p-4 text-center text-muted">Acesso restrito ou nenhum produto encontrado.</div>
                         {% endfor %}
                     </div>
                 </div>
             </div>
             {% endif %}
 
-            {% if amostras|length > 0 or (role == 'ADMINISTRATOR' or role == 'VENDAS') and produtos|length == 0 %}
+            {% if amostras|length > 0 or role == 'ADMINISTRATOR' and produtos|length == 0 %}
             <div class="{{ 'col-12' if produtos|length == 0 else 'col-lg-7' }}">
                 <div class="content-box p-0 h-100">
                     <div class="p-3 border-bottom bg-light rounded-top d-flex justify-content-between">
@@ -119,7 +118,7 @@
                                 <div style="max-width: 75%;">
                                     <h6 class="mb-0 fw-bold">{{ a.nome }}</h6>
                                     <div class="d-flex gap-2 mt-1 mb-1">
-                                        <span class="badge-sku"><i class="bi bi-upc-scan"></i> {{ a.sku_amostras or 'S/SKU' }}</span>
+                                        {% if a.sku_amostras %}<span class="badge-sku"><i class="bi bi-upc-scan"></i> {{ a.sku_amostras }}</span>{% endif %}
                                         {% if a.categoria_amostra %}<span class="badge-cat">{{ a.categoria_amostra }}</span>{% endif %}
                                     </div>
                                     <small class="text-muted">PAT: {{ a.codigo_patrimonio or 'S/N' }}</small>
@@ -148,9 +147,7 @@
                             <a href="/elostock/acao/amostra/{{ a.id }}" class="btn btn-outline-dark btn-sm w-100 mt-2 rounded-pill">Gerenciar</a>
                         </div>
                         {% else %}
-                            <div class="p-4 text-center text-muted">
-                                {% if search_query %}Nenhuma amostra encontrada para "{{ search_query }}".{% else %}Sem amostras cadastradas.{% endif %}
-                            </div>
+                            <div class="p-4 text-center text-muted">Acesso restrito ou nenhuma amostra encontrada.</div>
                         {% endfor %}
                     </div>
                 </div>
@@ -178,7 +175,6 @@
                         <div class="text-center mb-4">
                             <span class="display-5 fw-bold text-primary">{{ item.quantidade }}</span>
                             <span class="text-muted d-block">em estoque</span>
-                            {% if item.sku_produtos %}<small class="text-muted">SKU: {{ item.sku_produtos }}</small>{% endif %}
                         </div>
                         <label class="fw-bold">Qtd Retirada</label>
                         <input type="number" name="qtd" class="form-control mb-3" value="1" min="1" max="{{ item.quantidade }}">
