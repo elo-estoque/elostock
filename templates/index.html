@@ -11,9 +11,19 @@
         .content-box { background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); padding: 2rem; }
         .card-item { transition: all 0.2s; border: none; border-bottom: 1px solid #eee; }
         .card-item:hover { background-color: #fcfcfc; }
-        /* Estilos novos para SKU e Categoria */
         .badge-cat { font-size: 0.75rem; background-color: #e9ecef; color: #495057; border-radius: 4px; padding: 2px 6px; }
         .badge-sku { font-size: 0.7rem; color: #6c757d; font-family: monospace; }
+        
+        /* CHATBOT STYLES */
+        #chat-btn { position: fixed; bottom: 20px; right: 20px; z-index: 1000; width: 60px; height: 60px; border-radius: 50%; font-size: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+        #chat-window { position: fixed; bottom: 90px; right: 20px; z-index: 1000; width: 350px; height: 450px; display: none; flex-direction: column; border: none; border-radius: 15px; overflow: hidden; box-shadow: 0 5px 25px rgba(0,0,0,0.2); }
+        .chat-header { background: #0d6efd; color: white; padding: 15px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
+        .chat-body { flex: 1; background: #fff; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; font-size: 0.9rem; }
+        .chat-footer { padding: 10px; background: #f8f9fa; border-top: 1px solid #eee; display: flex; gap: 5px; }
+        .msg { padding: 8px 12px; border-radius: 12px; max-width: 80%; }
+        .msg-user { background: #e9ecef; align-self: flex-end; border-bottom-right-radius: 2px; }
+        .msg-ai { background: #e3f2fd; color: #0d6efd; align-self: flex-start; border-bottom-left-radius: 2px; }
+        .typing { font-size: 0.8rem; color: #aaa; font-style: italic; display: none; margin-left: 10px; }
     </style>
 </head>
 <body>
@@ -35,10 +45,7 @@
     {% elif view_mode == 'dashboard' %}
     <nav class="navbar navbar-dark bg-dark mb-4">
         <div class="container">
-            <span class="navbar-brand fw-bold">
-                EloStock 
-                <span class="badge bg-secondary ms-2" style="font-size: 0.7em">{{ role }}</span>
-            </span>
+            <span class="navbar-brand fw-bold">EloStock <span class="badge bg-secondary ms-2" style="font-size: 0.7em">{{ role }}</span></span>
             <div class="d-flex align-items-center gap-3">
                 <span class="text-white small d-none d-md-block">{{ user }}</span>
                 <a href="/elostock/logout" class="btn btn-outline-secondary btn-sm text-white">Sair</a>
@@ -64,9 +71,7 @@
                         {% endfor %}
                     </select>
                 </div>
-                <div class="col-md-2">
-                    <button type="submit" class="btn btn-primary w-100 fw-bold">Filtrar</button>
-                </div>
+                <div class="col-md-2"><button type="submit" class="btn btn-primary w-100 fw-bold">Filtrar</button></div>
             </form>
         </div>
 
@@ -97,7 +102,7 @@
                             </div>
                         </div>
                         {% else %}
-                            <div class="p-4 text-center text-muted">Acesso restrito ou nenhum produto encontrado.</div>
+                            <div class="p-4 text-center text-muted">Acesso restrito ou nenhum produto.</div>
                         {% endfor %}
                     </div>
                 </div>
@@ -129,7 +134,6 @@
                                     <span class="badge bg-warning bg-opacity-10 text-warning border border-warning text-dark">Em Rua</span>
                                 {% endif %}
                             </div>
-
                             {% if a.status == 'DISPONIVEL' %}
                                 <div class="small text-muted mt-2"><i class="bi bi-geo-alt-fill me-1"></i> Local: {{ a.local_fisico or 'Não definido' }}</div>
                             {% else %}
@@ -138,24 +142,83 @@
                                         <span><strong>Resp:</strong> {{ a.vendedor_responsavel }}</span>
                                         <span class="text-danger fw-bold">Volta: {{ a.data_prevista_retorno.strftime('%d/%m') if a.data_prevista_retorno else '?' }}</span>
                                     </div>
-                                    <div class="small text-muted pt-1">
-                                        <i class="bi bi-truck me-1"></i> Destino: <strong>{{ a.cliente_destino or 'Não inf.' }}</strong>
-                                    </div>
+                                    <div class="small text-muted pt-1"><i class="bi bi-truck me-1"></i> Destino: <strong>{{ a.cliente_destino or 'Não inf.' }}</strong></div>
                                 </div>
                             {% endif %}
-                            
                             <a href="/elostock/acao/amostra/{{ a.id }}" class="btn btn-outline-dark btn-sm w-100 mt-2 rounded-pill">Gerenciar</a>
                         </div>
                         {% else %}
-                            <div class="p-4 text-center text-muted">Acesso restrito ou nenhuma amostra encontrada.</div>
+                            <div class="p-4 text-center text-muted">Acesso restrito ou nenhuma amostra.</div>
                         {% endfor %}
                     </div>
                 </div>
             </div>
             {% endif %}
-
         </div>
     </div>
+
+    <button id="chat-btn" class="btn btn-primary" onclick="toggleChat()"><i class="bi bi-chat-dots-fill"></i></button>
+    <div id="chat-window" class="content-box p-0">
+        <div class="chat-header">
+            <span>Assistente IA</span>
+            <button type="button" class="btn-close btn-close-white" onclick="toggleChat()"></button>
+        </div>
+        <div class="chat-body" id="chat-msgs">
+            <div class="msg msg-ai">Olá! Eu posso atualizar o estoque ou registrar saída de amostras para você. O que deseja?</div>
+        </div>
+        <div class="typing" id="typing-indicator">IA digitando...</div>
+        <div class="chat-footer">
+            <input type="text" id="chat-input" class="form-control form-control-sm" placeholder="Ex: Retirei 5 cadernos..." onkeypress="handleEnter(event)">
+            <button class="btn btn-primary btn-sm" onclick="sendMessage()"><i class="bi bi-send-fill"></i></button>
+        </div>
+    </div>
+
+    <script>
+        function toggleChat() {
+            const w = document.getElementById('chat-window');
+            w.style.display = w.style.display === 'flex' ? 'none' : 'flex';
+        }
+
+        function handleEnter(e) { if(e.key === 'Enter') sendMessage(); }
+
+        async function sendMessage() {
+            const input = document.getElementById('chat-input');
+            const txt = input.value.trim();
+            if(!txt) return;
+
+            addMsg(txt, 'user');
+            input.value = '';
+            document.getElementById('typing-indicator').style.display = 'block';
+
+            try {
+                const req = await fetch('/elostock/api/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({message: txt})
+                });
+                const res = await req.json();
+                document.getElementById('typing-indicator').style.display = 'none';
+                addMsg(res.response, 'ai');
+                
+                // Se a IA confirmar sucesso, recarrega a página após 2s para ver as mudanças
+                if(res.response.toLowerCase().includes('sucesso') || res.response.toLowerCase().includes('feito')) {
+                    setTimeout(() => location.reload(), 2000);
+                }
+
+            } catch(e) {
+                document.getElementById('typing-indicator').style.display = 'none';
+                addMsg("Erro de conexão.", 'ai');
+            }
+        }
+
+        function addMsg(txt, type) {
+            const div = document.createElement('div');
+            div.className = `msg msg-${type}`;
+            div.innerText = txt;
+            document.getElementById('chat-msgs').appendChild(div);
+            document.getElementById('chat-msgs').scrollTop = document.getElementById('chat-msgs').scrollHeight;
+        }
+    </script>
 
     {% elif view_mode == 'acao' %}
     <div class="container d-flex align-items-center justify-content-center" style="min-height: 100vh;">
