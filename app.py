@@ -98,7 +98,8 @@ if GEMINI_API_KEY:
 
 # --- ROTAS ---
 
-@app.route('/', methods=['GET', 'POST'])
+# Alteração: Rota base agora inclui /elostock/
+@app.route('/elostock/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST' and 'login_email' in request.form:
         email = request.form.get('login_email')
@@ -133,18 +134,23 @@ def index():
                 else:
                     session['user_role'] = 'PUBLIC'
                 
-                return redirect(url_for('dashboard'))
+                # Alteração: Redireciona para /elostock/dashboard
+                return redirect('/elostock/dashboard')
             
             return render_template('index.html', view_mode='login', erro="Credenciais inválidas.")
         except Exception as e:
             return render_template('index.html', view_mode='login', erro=f"Erro de Conexão: {str(e)}")
 
-    if 'user_email' in session: return redirect(url_for('dashboard'))
+    if 'user_email' in session: 
+        # Alteração: Redireciona para /elostock/dashboard
+        return redirect('/elostock/dashboard')
     return render_template('index.html', view_mode='login')
 
-@app.route('/dashboard')
+# Alteração: Rota dashboard agora inclui /elostock
+@app.route('/elostock/dashboard')
 def dashboard():
-    if 'user_email' not in session: return redirect(url_for('index'))
+    # Alteração: Se não estiver logado, vai para /elostock/
+    if 'user_email' not in session: return redirect('/elostock/')
     
     role = session.get('user_role', 'PUBLIC')
     
@@ -168,9 +174,10 @@ def dashboard():
                            user=session['user_email'],
                            role=role) 
 
-@app.route('/acao/<tipo>/<int:id>', methods=['GET', 'POST'])
+# Alteração: Rota acao agora inclui /elostock
+@app.route('/elostock/acao/<tipo>/<int:id>', methods=['GET', 'POST'])
 def acao(tipo, id):
-    if 'user_email' not in session: return redirect(url_for('index'))
+    if 'user_email' not in session: return redirect('/elostock/')
     
     role = session.get('user_role', 'PUBLIC')
     # BLOQUEIO DE SEGURANÇA
@@ -214,14 +221,17 @@ def acao(tipo, id):
 
     return render_template('index.html', view_mode='acao', item=item, tipo=tipo, msg=msg_sucesso)
 
-@app.route('/logout')
+# Alteração: Rota logout agora inclui /elostock
+@app.route('/elostock/logout')
 def logout():
     session.clear()
-    return redirect(url_for('index'))
+    # Alteração: Redireciona para a raiz /elostock/
+    return redirect('/elostock/')
 
 # --- SLACK ---
 if slack_app:
-    @app.route("/slack/events", methods=["POST"])
+    # Alteração: Rota Slack também precisa do prefixo se o Traefik só manda /elostock
+    @app.route("/elostock/slack/events", methods=["POST"])
     def slack_events(): return handler.handle(request)
 
 if __name__ == '__main__':
