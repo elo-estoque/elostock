@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import requests
 import urllib3
 import json
+import warnings # Adicionado para tratar compatibilidade
 from flask import Flask, request, render_template, session, redirect, url_for, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import or_
@@ -12,7 +13,10 @@ from slack_bolt.adapter.flask import SlackRequestHandler
 import google.generativeai as genai
 from google.generativeai.types import FunctionDeclaration, Tool
 
-# --- SILENCIAR AVISOS DE SSL ---
+# --- ESQUEMA DE COMPATIBILIDADE (CORREÇÃO DO LOG VERMELHO) ---
+# Ignora avisos de versão antiga do Python e SSL
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- CONFIGURAÇÃO ---
@@ -261,7 +265,7 @@ def dashboard():
                            user=session['user_email'],
                            role=role) 
 
-# --- NOVA ROTA API CHAT ---
+# --- ROTA API CHAT (ATUALIZADA E ESTABILIZADA) ---
 @app.route('/elostock/api/chat', methods=['POST'])
 def api_chat():
     if 'user_email' not in session:
@@ -272,7 +276,22 @@ def api_chat():
     usuario_atual = session['user_email']
 
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash', tools=tools_gemini)
+        # Configuração para evitar alucinações e erros de modelo
+        generation_config = {
+            "temperature": 0.4,       # Baixa criatividade para garantir precisão
+            "top_p": 0.95,
+            "top_k": 40,
+            "max_output_tokens": 1024,
+            "response_mime_type": "text/plain",
+        }
+
+        # Instancia o modelo com a configuração robusta
+        model = genai.GenerativeModel(
+            model_name='gemini-1.5-flash', 
+            tools=tools_gemini,
+            generation_config=generation_config
+        )
+
         chat = model.start_chat(enable_automatic_function_calling=True)
         
         # Injetamos o contexto do usuário na mensagem do sistema
@@ -288,7 +307,7 @@ def api_chat():
 
     except Exception as e:
         print(f"Erro Chat: {e}")
-        return jsonify({"response": "Desculpe, tive um erro interno ao processar seu pedido."})
+        return jsonify({"response": "Desculpe, tive um erro interno ao processar seu pedido (consulte o log)."})
 
 @app.route('/elostock/acao/<tipo>/<int:id>', methods=['GET', 'POST'])
 def acao(tipo, id):
