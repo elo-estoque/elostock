@@ -38,7 +38,7 @@
             </span>
             <div class="d-flex align-items-center gap-3">
                 <span class="text-white small d-none d-md-block">{{ user }}</span>
-                <a href="/logout" class="btn btn-outline-secondary btn-sm text-white">Sair</a>
+                <a href="/elostock/logout" class="btn btn-outline-secondary btn-sm text-white">Sair</a>
             </div>
         </div>
     </nav>
@@ -63,7 +63,7 @@
                             </div>
                             <div class="text-end">
                                 <div class="h5 mb-0 fw-bold">{{ p.quantidade }}</div>
-                                <a href="/acao/produto/{{ p.id }}" class="btn btn-link btn-sm p-0 text-decoration-none">Retirar</a>
+                                <a href="/elostock/acao/produto/{{ p.id }}" class="btn btn-link btn-sm p-0 text-decoration-none">Retirar</a>
                             </div>
                         </div>
                         {% else %}
@@ -110,7 +110,7 @@
                                 </div>
                             {% endif %}
                             
-                            <a href="/acao/amostra/{{ a.id }}" class="btn btn-outline-dark btn-sm w-100 mt-2 rounded-pill">Gerenciar</a>
+                            <a href="/elostock/acao/amostra/{{ a.id }}" class="btn btn-outline-dark btn-sm w-100 mt-2 rounded-pill">Gerenciar</a>
                         </div>
                         {% else %}
                             <div class="p-4 text-center text-muted">Acesso restrito ou sem amostras.</div>
@@ -131,7 +131,7 @@
                     <div class="text-success mb-3"><i class="bi bi-check-circle-fill fs-1"></i></div>
                     <h4>Sucesso!</h4>
                     <p class="text-muted">{{ msg }}</p>
-                    <a href="/dashboard" class="btn btn-dark w-100">Voltar</a>
+                    <a href="/elostock/dashboard" class="btn btn-dark w-100">Voltar</a>
                 </div>
             {% else %}
                 <h5 class="text-secondary small text-uppercase mb-1">Gerenciando</h5>
@@ -171,7 +171,7 @@
                         {% endif %}
                     {% endif %}
                 </form>
-                <a href="/dashboard" class="d-block text-center mt-3 text-muted text-decoration-none small">Cancelar</a>
+                <a href="/elostock/dashboard" class="d-block text-center mt-3 text-muted text-decoration-none small">Cancelar</a>
             {% endif %}
         </div>
     </div>
