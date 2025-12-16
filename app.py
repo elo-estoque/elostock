@@ -2,11 +2,16 @@ import os
 import logging
 from datetime import datetime, timedelta
 import requests
+# Import novo para silenciar o aviso de segurança
+import urllib3
 from flask import Flask, request, render_template, session, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from slack_bolt import App as BoltApp
 from slack_bolt.adapter.flask import SlackRequestHandler
 import google.generativeai as genai
+
+# --- SILENCIAR AVISOS DE SSL ---
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- CONFIGURAÇÃO ---
 app = Flask(__name__)
@@ -101,35 +106,38 @@ def index():
         try:
             if not DIRECTUS_URL: return render_template('index.html', view_mode='login', erro="Sem URL Directus")
             
-            # 1. Login para pegar Token
-            resp = requests.post(f"{DIRECTUS_URL}/auth/login", json={"email": email, "password": password})
+            # 1. Login para pegar Token (Com verify=False)
+            resp = requests.post(
+                f"{DIRECTUS_URL}/auth/login", 
+                json={"email": email, "password": password},
+                verify=False 
+            )
             
             if resp.status_code == 200:
                 token = resp.json()['data']['access_token']
                 session['user_token'] = token
                 session['user_email'] = email
                 
-                # 2. Busca Perfil para pegar a ROLE (Cargo)
+                # 2. Busca Perfil para pegar a ROLE (Com verify=False)
                 headers = {"Authorization": f"Bearer {token}"}
-                # Pede o nome da role associada ao usuário
-                user_info = requests.get(f"{DIRECTUS_URL}/users/me?fields=role.name", headers=headers)
+                user_info = requests.get(
+                    f"{DIRECTUS_URL}/users/me?fields=role.name", 
+                    headers=headers,
+                    verify=False
+                )
                 
                 if user_info.status_code == 200:
                     data = user_info.json().get('data', {})
-                    # Se for admin, as vezes a role vem diferente, mas vamos garantir:
                     role_name = data.get('role', {}).get('name', 'Public') if data.get('role') else 'Public'
-                    
-                    # Normaliza para maiúsculo (COMPRAS, VENDAS, ADMINISTRATOR)
                     session['user_role'] = role_name.upper()
                 else:
-                    # Se falhar (falta de permissão), assume public
                     session['user_role'] = 'PUBLIC'
                 
                 return redirect(url_for('dashboard'))
             
             return render_template('index.html', view_mode='login', erro="Credenciais inválidas.")
         except Exception as e:
-            return render_template('index.html', view_mode='login', erro=f"Erro: {str(e)}")
+            return render_template('index.html', view_mode='login', erro=f"Erro de Conexão: {str(e)}")
 
     if 'user_email' in session: return redirect(url_for('dashboard'))
     return render_template('index.html', view_mode='login')
@@ -158,7 +166,7 @@ def dashboard():
                            produtos=produtos, 
                            amostras=amostras, 
                            user=session['user_email'],
-                           role=role) # Passa a role pro template
+                           role=role) 
 
 @app.route('/acao/<tipo>/<int:id>', methods=['GET', 'POST'])
 def acao(tipo, id):
