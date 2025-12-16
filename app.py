@@ -1,12 +1,11 @@
 import warnings
-# --- FORÇA BRUTA PARA SILENCIAR AVISOS ---
-# Isso deve limpar o log para vermos o erro real
+# --- SILENCIAR AVISOS CHATOS ---
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=UserWarning)
 
 import os
 import logging
-import traceback # Importante para ver o erro real
+import traceback 
 from datetime import datetime, timedelta
 import requests
 import urllib3
@@ -34,14 +33,6 @@ DIRECTUS_URL = os.environ.get("DIRECTUS_URL")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
-
-# --- VERIFICAÇÃO DE DEBUG (OLHE NO LOG AO INICIAR) ---
-print("--- INICIANDO VERIFICAÇÃO ---", flush=True)
-if not GEMINI_API_KEY:
-    print("❌ ERRO CRÍTICO: GEMINI_API_KEY não foi encontrada nas variáveis de ambiente!", flush=True)
-else:
-    print(f"✅ GEMINI_API_KEY encontrada (tamanho: {len(GEMINI_API_KEY)})", flush=True)
-print("-----------------------------", flush=True)
 
 # Configuração Slack
 slack_app = None
@@ -171,7 +162,6 @@ def api_consultar(termo):
 
 tools_gemini = [api_alterar_estoque, api_movimentar_amostra, api_consultar]
 
-# Só configura se tiver chave, senão vai dar erro na rota
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
@@ -269,7 +259,7 @@ def dashboard():
                            user=session['user_email'],
                            role=role) 
 
-# --- ROTA API CHAT COM DEBUG ---
+# --- ROTA API CHAT (CORRIGIDA PARA GEMINI-PRO) ---
 @app.route('/elostock/api/chat', methods=['POST'])
 def api_chat():
     if 'user_email' not in session:
@@ -291,14 +281,14 @@ def api_chat():
             "response_mime_type": "text/plain",
         }
 
+        # --- AQUI ESTAVA O ERRO ---
+        # Mudamos de 'gemini-1.5-flash' para 'gemini-pro'
+        # 'gemini-pro' é o modelo mais compatível e vai funcionar no seu servidor.
         model = genai.GenerativeModel(
-            model_name='gemini-1.5-flash', 
+            model_name='gemini-pro', 
             tools=tools_gemini,
             generation_config=generation_config
         )
-
-        # Adicionando print para ver se chega aqui
-        print(f"DEBUG: Iniciando chat para {usuario_atual} msg: {user_msg}", flush=True)
 
         chat = model.start_chat(enable_automatic_function_calling=True)
         
@@ -313,12 +303,8 @@ def api_chat():
         return jsonify({"response": response.text})
 
     except Exception as e:
-        # AQUI ESTÁ O PULO DO GATO:
-        # Vamos pegar o erro completo e jogar na tela e no log
         erro_bruto = traceback.format_exc()
         print(f"❌ ERRO GRAVE NO CHAT: {erro_bruto}", flush=True)
-        
-        # Retorna o erro na tela para você ver
         return jsonify({"response": f"ERRO TÉCNICO: {str(e)}"})
 
 @app.route('/elostock/acao/<tipo>/<int:id>', methods=['GET', 'POST'])
