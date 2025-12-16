@@ -1,5 +1,5 @@
 import warnings
-# --- SILENCIAR AVISOS CHATOS ---
+# --- SILENCIAR TUDO PARA LIMPAR O LOG ---
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=UserWarning)
 
@@ -259,7 +259,7 @@ def dashboard():
                            user=session['user_email'],
                            role=role) 
 
-# --- ROTA API CHAT (CORRIGIDA PARA GEMINI-PRO) ---
+# --- ROTA API CHAT COM AUTO-DETECÇÃO DE MODELO ---
 @app.route('/elostock/api/chat', methods=['POST'])
 def api_chat():
     if 'user_email' not in session:
@@ -273,6 +273,47 @@ def api_chat():
          return jsonify({"response": "ERRO: GEMINI_API_KEY não configurada no servidor."})
 
     try:
+        # --- LÓGICA DE AUTO-SELEÇÃO DE MODELO ---
+        # 1. Lista todos os modelos disponíveis para sua chave
+        modelos_disponiveis = []
+        try:
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    modelos_disponiveis.append(m.name)
+            
+            print(f"DEBUG: Modelos Disponíveis: {modelos_disponiveis}", flush=True)
+            
+            if not modelos_disponiveis:
+                return jsonify({"response": "ERRO: A API do Google conectou, mas disse que não há modelos disponíveis para sua chave."})
+
+        except Exception as e_list:
+            print(f"ERRO AO LISTAR MODELOS: {e_list}", flush=True)
+            return jsonify({"response": f"Erro de conexão com Google: {str(e_list)}"})
+
+        # 2. Escolhe o melhor (Prioridade: Flash > Pro > Qualquer um)
+        modelo_escolhido = None
+        
+        # Tenta achar o Flash
+        for m in modelos_disponiveis:
+            if 'flash' in m.lower():
+                modelo_escolhido = m
+                break
+        
+        # Se não achou Flash, tenta Pro
+        if not modelo_escolhido:
+            for m in modelos_disponiveis:
+                if 'pro' in m.lower():
+                    modelo_escolhido = m
+                    break
+        
+        # Se não achou nenhum específico, pega o primeiro da lista
+        if not modelo_escolhido:
+            modelo_escolhido = modelos_disponiveis[0]
+
+        print(f"DEBUG: Usando o modelo: {modelo_escolhido}", flush=True)
+
+        # --- FIM DA SELEÇÃO ---
+
         generation_config = {
             "temperature": 0.4, 
             "top_p": 0.95,
@@ -281,11 +322,9 @@ def api_chat():
             "response_mime_type": "text/plain",
         }
 
-        # --- AQUI ESTAVA O ERRO ---
-        # Mudamos de 'gemini-1.5-flash' para 'gemini-pro'
-        # 'gemini-pro' é o modelo mais compatível e vai funcionar no seu servidor.
+        # Instancia usando o nome que descobrimos dinamicamente
         model = genai.GenerativeModel(
-            model_name='gemini-pro', 
+            model_name=modelo_escolhido, 
             tools=tools_gemini,
             generation_config=generation_config
         )
