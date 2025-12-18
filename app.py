@@ -6,18 +6,30 @@ warnings.simplefilter(action='ignore', category=UserWarning)
 import os
 import logging
 import traceback 
-import difflib # Biblioteca para comparação inteligente de texto
+import difflib 
 from datetime import datetime, timedelta
 import requests
 import urllib3
 import json
-from flask import Flask, request, render_template, session, redirect, url_for, jsonify
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
+from flask import Flask, request, render_template, session, redirect, url_for, jsonify, render_template_string, make_response
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import or_
 from slack_bolt import App as BoltApp
 from slack_bolt.adapter.flask import SlackRequestHandler
 import google.generativeai as genai
 from google.generativeai.types import FunctionDeclaration, Tool
+
+# Tenta importar WeasyPrint para PDF (se falhar, avisa no log mas não quebra o app todo)
+try:
+    from weasyprint import HTML
+    HAS_WEASYPRINT = True
+except ImportError:
+    HAS_WEASYPRINT = False
+    print("⚠️ AVISO: WeasyPrint não instalado. Geração de PDF não funcionará.")
 
 # --- CONFIGURAÇÃO ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -34,6 +46,13 @@ DIRECTUS_URL = os.environ.get("DIRECTUS_URL")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
+
+# Configuração de E-mail (Adicione estas env vars no seu Dokploy se quiser que funcione real)
+SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = os.environ.get("SMTP_PORT", 587)
+SMTP_USER = os.environ.get("SMTP_USER")     # Seu email
+SMTP_PASS = os.environ.get("SMTP_PASS")     # Sua senha de app
+EMAIL_CHEFE = os.environ.get("EMAIL_CHEFE", "chefe@elobrindes.com.br")
 
 # Configuração Slack
 slack_app = None
@@ -81,38 +100,41 @@ class Log(db.Model):
     usuario_nome = db.Column(db.String(100))
     data_evento = db.Column(db.DateTime, default=datetime.now)
 
+class Protocolo(db.Model):
+    __tablename__ = 'protocolos'
+    id = db.Column(db.Integer, primary_key=True)
+    vendedor_email = db.Column(db.String(150))
+    cliente_nome = db.Column(db.String(150))
+    cliente_empresa = db.Column(db.String(150))
+    cliente_cnpj = db.Column(db.String(50))
+    cliente_email = db.Column(db.String(150))
+    cliente_telefone = db.Column(db.String(50))
+    cliente_endereco = db.Column(db.Text)
+    itens_json = db.Column(db.JSON) # Armazena lista de itens: [{'sku':..., 'nome':..., 'qtd':...}]
+    status = db.Column(db.String(50), default='ABERTO')
+    arquivo_pdf = db.Column(db.String(255))
+    data_criacao = db.Column(db.DateTime, default=datetime.now)
+    data_prevista_devolucao = db.Column(db.DateTime)
+
 # --- FUNÇÃO DE BUSCA INTELIGENTE (Fuzzy Match) ---
 def encontrar_produto_inteligente(termo_busca):
-    """
-    Tenta encontrar um produto usando:
-    1. Busca exata (SQL ILIKE)
-    2. Busca singular (remove 's' final)
-    3. Busca por similaridade (difflib)
-    Retorna (produto_obj, mensagem_explicativa) ou (None, erro)
-    """
     termo_limpo = termo_busca.strip()
-    
-    # 1. Tentativa SQL Padrão (Nome ou SKU)
     produto = Produto.query.filter(or_(
         Produto.nome.ilike(f'%{termo_limpo}%'),
         Produto.sku_produtos.ilike(f'%{termo_limpo}%')
     )).first()
     
     if produto:
-        return produto, None # Encontrou direto
+        return produto, None 
 
-    # 2. Tentativa Singular (Se for plural "cadernos" -> "caderno")
     if termo_limpo.lower().endswith('s'):
         termo_singular = termo_limpo[:-1]
         produto = Produto.query.filter(Produto.nome.ilike(f'%{termo_singular}%')).first()
         if produto:
             return produto, f"(Assumi que '{termo_limpo}' era '{produto.nome}')"
 
-    # 3. Tentativa Fuzzy (Similaridade) - A "Mágica"
     todos_produtos = db.session.query(Produto.id, Produto.nome).all()
     nomes_db = [p.nome for p in todos_produtos]
-    
-    # Busca o nome mais parecido (cutoff 0.6 significa 60% de semelhança mínima)
     matches = difflib.get_close_matches(termo_limpo, nomes_db, n=1, cutoff=0.5)
     
     if matches:
@@ -123,105 +145,67 @@ def encontrar_produto_inteligente(termo_busca):
     return None, f"Não encontrei nada parecido com '{termo_busca}'."
 
 # --- TOOLS DO GEMINI ---
-
 def api_alterar_estoque(nome_ou_sku, quantidade, usuario):
     with app.app_context():
-        # Usa a busca inteligente agora
         produto, msg_extra = encontrar_produto_inteligente(nome_ou_sku)
-        
-        if not produto:
-            return msg_extra # Retorna o erro de não encontrado
-        
-        try:
-            qtd_int = int(quantidade)
-        except:
-            return "Erro: Quantidade inválida."
-
+        if not produto: return msg_extra
+        try: qtd_int = int(quantidade)
+        except: return "Erro: Quantidade inválida."
         nova_qtd = produto.quantidade + qtd_int
-        if nova_qtd < 0:
-             return f"Erro: O produto {produto.nome} só tem {produto.quantidade} unidades. Não dá para retirar {abs(qtd_int)}."
-
+        if nova_qtd < 0: return f"Erro: O produto {produto.nome} só tem {produto.quantidade} unidades."
         produto.quantidade = nova_qtd
-        
         acao_log = 'CHAT_ENTRADA' if qtd_int > 0 else 'CHAT_SAIDA'
-        db.session.add(Log(
-            tipo_item='produto', 
-            item_id=produto.id, 
-            acao=acao_log, 
-            quantidade=abs(qtd_int), 
-            usuario_nome=usuario
-        ))
+        db.session.add(Log(tipo_item='produto', item_id=produto.id, acao=acao_log, quantidade=abs(qtd_int), usuario_nome=usuario))
         db.session.commit()
-        
         feedback = f"Sucesso! Estoque de {produto.nome} foi para {produto.quantidade}."
-        if msg_extra:
-            feedback += f" {msg_extra}"
-            
+        if msg_extra: feedback += f" {msg_extra}"
         return feedback
 
 def api_movimentar_amostra(nome_ou_pat, acao, cliente_destino, usuario):
     with app.app_context():
-        # Busca Amostra (Lógica simples por enquanto, pode aplicar fuzzy aqui tbm se quiser)
         amostra = Amostra.query.filter(or_(
             Amostra.nome.ilike(f'%{nome_ou_pat}%'),
             Amostra.codigo_patrimonio.ilike(f'%{nome_ou_pat}%'),
             Amostra.sku_amostras.ilike(f'%{nome_ou_pat}%')
         )).first()
-
         if not amostra:
-            # Tenta Fuzzy para amostra também
-            todas = db.session.query(Amostra.nome).all()
-            nomes = [a.nome for a in todas]
+            todos = db.session.query(Amostra.nome).all()
+            nomes = [a.nome for a in todos]
             matches = difflib.get_close_matches(nome_ou_pat, nomes, n=1, cutoff=0.6)
-            if matches:
-                amostra = Amostra.query.filter_by(nome=matches[0]).first()
-            else:
-                return f"Erro: Amostra '{nome_ou_pat}' não encontrada."
+            if matches: amostra = Amostra.query.filter_by(nome=matches[0]).first()
+            else: return f"Erro: Amostra '{nome_ou_pat}' não encontrada."
 
         if acao.lower() == 'retirar':
-            if amostra.status != 'DISPONIVEL':
-                return f"Erro: A amostra {amostra.nome} já está com {amostra.vendedor_responsavel}."
-            
+            if amostra.status != 'DISPONIVEL': return f"Erro: A amostra {amostra.nome} já está com {amostra.vendedor_responsavel}."
             amostra.status = 'EM_RUA'
             amostra.vendedor_responsavel = usuario
             amostra.cliente_destino = cliente_destino or "Cliente Não Informado"
             amostra.data_saida = datetime.now()
             amostra.data_prevista_retorno = datetime.now() + timedelta(days=7)
-            
             db.session.add(Log(tipo_item='amostra', item_id=amostra.id, acao='CHAT_RETIRADA', usuario_nome=usuario))
         
         elif acao.lower() == 'devolver':
-            if amostra.status == 'DISPONIVEL':
-                return f"A amostra {amostra.nome} já consta como disponível."
-            
+            if amostra.status == 'DISPONIVEL': return f"A amostra {amostra.nome} já consta como disponível."
             amostra.status = 'DISPONIVEL'
             amostra.vendedor_responsavel = None
             amostra.cliente_destino = None
-            
             db.session.add(Log(tipo_item='amostra', item_id=amostra.id, acao='CHAT_DEVOLUCAO', usuario_nome=usuario))
-        
-        else:
-            return "Ação desconhecida. Use 'retirar' ou 'devolver'."
+        else: return "Ação desconhecida. Use 'retirar' ou 'devolver'."
 
         db.session.commit()
         return f"Feito! Amostra {amostra.nome} agora está {amostra.status}."
 
 def api_consultar(termo):
     with app.app_context():
-        # Busca Produto Inteligente
         p, _ = encontrar_produto_inteligente(termo)
         res_p = f"Produto: {p.nome} | Qtd: {p.quantidade} | Local: {p.localizacao}" if p else ""
-        
-        # Busca Amostra (Simples)
         a = Amostra.query.filter(Amostra.nome.ilike(f'%{termo}%')).first()
-        if not a: # Fuzzy fallback
+        if not a:
             todos = [x.nome for x in db.session.query(Amostra.nome).all()]
             match = difflib.get_close_matches(termo, todos, n=1, cutoff=0.6)
             if match: a = Amostra.query.filter_by(nome=match[0]).first()
-
         status_a = f"Com {a.vendedor_responsavel}" if a and a.status != 'DISPONIVEL' else "Disponível"
         res_a = f"Amostra: {a.nome} | Status: {status_a}" if a else ""
-        
         if not p and not a: return "Não encontrei nada parecido no estoque nem nas amostras."
         return f"{res_p}\n{res_a}"
 
@@ -233,6 +217,104 @@ if GEMINI_API_KEY:
     except Exception as e:
         print(f"Erro ao configurar GENAI: {e}", flush=True)
 
+# --- UTILS PARA PROTOCOLO (PDF & EMAIL) ---
+def gerar_html_protocolo(protocolo):
+    itens = protocolo.itens_json if protocolo.itens_json else []
+    total = len(itens)
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: sans-serif; color: #333; }}
+            .header {{ display: flex; justify-content: space-between; border-bottom: 3px solid #E31937; padding-bottom: 10px; margin-bottom: 20px; }}
+            .logo {{ font-size: 24px; font-weight: bold; color: #E31937; }}
+            .box {{ border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; font-size: 12px; }}
+            .title {{ background: #eee; font-weight: bold; padding: 5px; margin-bottom: 5px; }}
+            table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+            th {{ background-color: #f2f2f2; }}
+            .footer {{ margin-top: 30px; font-size: 10px; text-align: center; color: #777; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <div class="logo">ELO BRINDES</div>
+            <div style="text-align: right;">
+                <h2>PROTOCOLO #{protocolo.id}</h2>
+                <small>Gerado em: {protocolo.data_criacao.strftime('%d/%m/%Y %H:%M')}</small>
+            </div>
+        </div>
+
+        <div class="box">
+            <div class="title">DADOS DO VENDEDOR</div>
+            <strong>Vendedor:</strong> {protocolo.vendedor_email} <br>
+            <strong>Data Devolução Prevista:</strong> {protocolo.data_prevista_devolucao.strftime('%d/%m/%Y') if protocolo.data_prevista_devolucao else 'N/A'}
+        </div>
+
+        <div class="box">
+            <div class="title">DADOS DO CLIENTE</div>
+            <strong>Empresa:</strong> {protocolo.cliente_empresa} <br>
+            <strong>Nome:</strong> {protocolo.cliente_nome} | <strong>CNPJ:</strong> {protocolo.cliente_cnpj} <br>
+            <strong>Email:</strong> {protocolo.cliente_email} | <strong>Tel:</strong> {protocolo.cliente_telefone} <br>
+            <strong>Endereço:</strong> {protocolo.cliente_endereco}
+        </div>
+
+        <h3>Itens Solicitados</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>SKU / Código</th>
+                    <th>Produto / Descrição</th>
+                    <th>Quantidade</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+    for item in itens:
+        html += f"<tr><td>{item.get('sku', '-')}</td><td>{item.get('nome', 'Item')}</td><td>{item.get('qtd', 1)}</td></tr>"
+    
+    html += """
+            </tbody>
+        </table>
+        
+        <div class="footer">
+            <p>Este documento comprova a saída dos materiais acima listados para fins de demonstração/amostra.</p>
+            <p>Elo Brindes - Sistema EloStock</p>
+        </div>
+    </body>
+    </html>
+    """
+    return html
+
+def enviar_email_protocolo(protocolo, pdf_bytes):
+    if not SMTP_USER or not SMTP_PASS:
+        print("⚠️ SMTP não configurado. Email não enviado.")
+        return
+
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_USER
+        msg['To'] = f"{protocolo.vendedor_email}, {EMAIL_CHEFE}"
+        msg['Subject'] = f"Protocolo de Amostra #{protocolo.id} - {protocolo.cliente_empresa}"
+
+        body = f"Olá,\n\nSegue em anexo o protocolo #{protocolo.id} gerado para o cliente {protocolo.cliente_empresa}.\n\nSistema EloStock."
+        msg.attach(MIMEText(body, 'plain'))
+
+        part = MIMEApplication(pdf_bytes, Name=f"Protocolo_{protocolo.id}.pdf")
+        part['Content-Disposition'] = f'attachment; filename="Protocolo_{protocolo.id}.pdf"'
+        msg.attach(part)
+
+        server = smtplib.SMTP(SMTP_SERVER, int(SMTP_PORT))
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASS)
+        server.sendmail(SMTP_USER, [protocolo.vendedor_email, EMAIL_CHEFE], msg.as_string())
+        server.quit()
+        print(f"📧 Email enviado com sucesso para {protocolo.vendedor_email}")
+    except Exception as e:
+        print(f"❌ Erro ao enviar email: {e}")
+
 # --- ROTAS ---
 
 @app.route('/elostock/', methods=['GET', 'POST'])
@@ -242,41 +324,25 @@ def index():
         password = request.form.get('login_password')
         try:
             if not DIRECTUS_URL: return render_template('index.html', view_mode='login', erro="Sem URL Directus")
-            
-            resp = requests.post(
-                f"{DIRECTUS_URL}/auth/login", 
-                json={"email": email, "password": password},
-                verify=False 
-            )
-            
+            resp = requests.post(f"{DIRECTUS_URL}/auth/login", json={"email": email, "password": password}, verify=False)
             if resp.status_code == 200:
                 token = resp.json()['data']['access_token']
                 session['user_token'] = token
                 session['user_email'] = email
-                session['chat_history'] = [] # Inicia histórico vazio
-                
+                session['chat_history'] = [] 
                 headers = {"Authorization": f"Bearer {token}"}
-                user_info = requests.get(
-                    f"{DIRECTUS_URL}/users/me?fields=role.name", 
-                    headers=headers,
-                    verify=False
-                )
-                
+                user_info = requests.get(f"{DIRECTUS_URL}/users/me?fields=role.name", headers=headers, verify=False)
                 if user_info.status_code == 200:
                     data = user_info.json().get('data', {})
                     role_name = data.get('role', {}).get('name', 'Public') if data.get('role') else 'Public'
                     session['user_role'] = role_name.upper()
                 else:
                     session['user_role'] = 'PUBLIC'
-                
                 return redirect('/elostock/dashboard')
-            
             return render_template('index.html', view_mode='login', erro="Credenciais inválidas.")
         except Exception as e:
             return render_template('index.html', view_mode='login', erro=f"Erro de Conexão: {str(e)}")
-
-    if 'user_email' in session: 
-        return redirect('/elostock/dashboard')
+    if 'user_email' in session: return redirect('/elostock/dashboard')
     return render_template('index.html', view_mode='login')
 
 @app.route('/elostock/dashboard')
@@ -296,114 +362,140 @@ def dashboard():
     
     if ver_compras:
         query = Produto.query
-        if search_query:
-            query = query.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
-        if filter_cat:
-            query = query.filter(Produto.categoria_produtos == filter_cat)
+        if search_query: query = query.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
+        if filter_cat: query = query.filter(Produto.categoria_produtos == filter_cat)
         produtos = query.order_by(Produto.nome).all()
         cats = db.session.query(Produto.categoria_produtos).distinct().all()
-        for c in cats:
+        for c in cats: 
             if c.categoria_produtos: categorias_disponiveis.add(c.categoria_produtos)
         
     if ver_vendas:
         query = Amostra.query
-        if search_query:
-            query = query.filter(or_(Amostra.nome.ilike(f'%{search_query}%'), Amostra.sku_amostras.ilike(f'%{search_query}%')))
-        if filter_cat:
-            query = query.filter(Amostra.categoria_amostra == filter_cat)
+        if search_query: query = query.filter(or_(Amostra.nome.ilike(f'%{search_query}%'), Amostra.sku_amostras.ilike(f'%{search_query}%')))
+        if filter_cat: query = query.filter(Amostra.categoria_amostra == filter_cat)
         amostras = query.order_by(Amostra.status.desc(), Amostra.nome).all()
         cats = db.session.query(Amostra.categoria_amostra).distinct().all()
-        for c in cats:
+        for c in cats: 
             if c.categoria_amostra: categorias_disponiveis.add(c.categoria_amostra)
     
-    return render_template('index.html', view_mode='dashboard', 
-                           produtos=produtos, 
-                           amostras=amostras, 
-                           categorias=sorted(list(categorias_disponiveis)),
-                           search_query=search_query,
-                           selected_cat=filter_cat,
-                           user=session['user_email'],
-                           role=role) 
+    return render_template('index.html', view_mode='dashboard', produtos=produtos, amostras=amostras, categorias=sorted(list(categorias_disponiveis)), search_query=search_query, selected_cat=filter_cat, user=session['user_email'], role=role) 
 
-# --- ROTA API CHAT COM LÓGICA REFINADA ---
+# --- ROTAS DE PROTOCOLO ---
+@app.route('/elostock/protocolos')
+def listar_protocolos():
+    if 'user_email' not in session: return redirect('/elostock/')
+    # Filtra: se admin vê tudo, se vendedor vê só os seus
+    role = session.get('user_role', 'PUBLIC')
+    if role == 'ADMINISTRATOR':
+        protocolos = Protocolo.query.order_by(Protocolo.id.desc()).all()
+    else:
+        protocolos = Protocolo.query.filter_by(vendedor_email=session['user_email']).order_by(Protocolo.id.desc()).all()
+    
+    return render_template('index.html', view_mode='protocolos', protocolos=protocolos, user=session['user_email'], role=role)
+
+@app.route('/elostock/protocolo/novo', methods=['GET', 'POST'])
+def novo_protocolo():
+    if 'user_email' not in session: return redirect('/elostock/')
+    
+    if request.method == 'POST':
+        try:
+            # Coleta dados do form
+            data_prevista = datetime.strptime(request.form.get('data_prevista'), '%Y-%m-%d')
+            
+            # Processa itens (Vem como arrays do form)
+            skus = request.form.getlist('item_sku[]')
+            nomes = request.form.getlist('item_nome[]')
+            qtds = request.form.getlist('item_qtd[]')
+            
+            itens_json = []
+            for i in range(len(skus)):
+                if nomes[i].strip(): # Só adiciona se tiver nome
+                    itens_json.append({
+                        "sku": skus[i], 
+                        "nome": nomes[i], 
+                        "qtd": qtds[i]
+                    })
+            
+            novo = Protocolo(
+                vendedor_email=session['user_email'],
+                cliente_nome=request.form.get('cliente_nome'),
+                cliente_empresa=request.form.get('cliente_empresa'),
+                cliente_cnpj=request.form.get('cliente_cnpj'),
+                cliente_email=request.form.get('cliente_email'),
+                cliente_telefone=request.form.get('cliente_telefone'),
+                cliente_endereco=request.form.get('cliente_endereco'),
+                data_prevista_devolucao=data_prevista,
+                itens_json=itens_json
+            )
+            
+            db.session.add(novo)
+            db.session.commit() # Comita para gerar o ID
+            
+            # Gera PDF e Envia Email
+            if HAS_WEASYPRINT:
+                html_content = gerar_html_protocolo(novo)
+                pdf_bytes = HTML(string=html_content).write_pdf()
+                enviar_email_protocolo(novo, pdf_bytes)
+            
+            return redirect('/elostock/protocolos')
+            
+        except Exception as e:
+            print(f"Erro ao criar protocolo: {e}")
+            return f"Erro: {e}"
+
+    return render_template('index.html', view_mode='novo_protocolo', user=session['user_email'])
+
+@app.route('/elostock/protocolo/download/<int:id>')
+def download_protocolo(id):
+    if 'user_email' not in session: return redirect('/elostock/')
+    if not HAS_WEASYPRINT: return "Erro: Biblioteca de PDF não instalada no servidor."
+    
+    protocolo = Protocolo.query.get_or_404(id)
+    html_content = gerar_html_protocolo(protocolo)
+    pdf = HTML(string=html_content).write_pdf()
+    
+    response = make_response(pdf)
+    response.headers['Content-Type'] = 'application/pdf'
+    response.headers['Content-Disposition'] = f'attachment; filename=Protocolo_{protocolo.id}.pdf'
+    return response
+
+# --- API CHAT ---
 @app.route('/elostock/api/chat', methods=['POST'])
 def api_chat():
-    if 'user_email' not in session:
-        return jsonify({"response": "Você precisa estar logado."}), 401
-    
+    if 'user_email' not in session: return jsonify({"response": "Você precisa estar logado."}), 401
     data = request.json
     user_msg = data.get('message')
     usuario_atual = session['user_email']
-
-    # Gerencia histórico simples na sessão
     historico = session.get('chat_history', [])
-    
-    # Limita histórico para não estourar a sessão (últimas 6 mensagens)
-    if len(historico) > 6:
-        historico = historico[-6:]
+    if len(historico) > 6: historico = historico[-6:]
 
-    if not GEMINI_API_KEY:
-         return jsonify({"response": "ERRO: GEMINI_API_KEY não configurada no servidor."})
+    if not GEMINI_API_KEY: return jsonify({"response": "ERRO: GEMINI_API_KEY não configurada."})
 
     try:
-        # 1. Detecta modelos (mantido para garantir compatibilidade)
         modelos_disponiveis = []
         try:
             for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods:
-                    modelos_disponiveis.append(m.name)
-        except:
-            pass # Se falhar a listagem, tenta hardcoded abaixo
-
-        modelo_escolhido = 'models/gemini-1.5-flash' # Preferência
-        
-        # Tenta achar Flash ou Pro na lista real
+                if 'generateContent' in m.supported_generation_methods: modelos_disponiveis.append(m.name)
+        except: pass
+        modelo_escolhido = 'models/gemini-1.5-flash' 
         if modelos_disponiveis:
             found_flash = next((m for m in modelos_disponiveis if 'flash' in m.lower()), None)
-            found_pro = next((m for m in modelos_disponiveis if 'pro' in m.lower()), None)
             if found_flash: modelo_escolhido = found_flash
-            elif found_pro: modelo_escolhido = found_pro
             else: modelo_escolhido = modelos_disponiveis[0]
 
-        print(f"DEBUG: Modelo: {modelo_escolhido} | User: {usuario_atual}", flush=True)
-
-        generation_config = {
-            "temperature": 0.3, # Mais preciso, menos criativo
-            "top_p": 0.95,
-            "top_k": 40,
-            "max_output_tokens": 1024,
-            "response_mime_type": "text/plain",
-        }
-
-        model = genai.GenerativeModel(
-            model_name=modelo_escolhido, 
-            tools=tools_gemini,
-            generation_config=generation_config
-        )
-
-        # Inicia chat SEMPRE com o histórico da sessão
-        # Precisamos converter o histórico simples para o formato do Gemini se quiséssemos stateful
-        # Mas para simplicidade e robustez, vamos injetar o histórico no prompt
-        
+        generation_config = {"temperature": 0.3, "top_p": 0.95, "top_k": 40, "max_output_tokens": 1024, "response_mime_type": "text/plain"}
+        model = genai.GenerativeModel(model_name=modelo_escolhido, tools=tools_gemini, generation_config=generation_config)
         hist_str = "\n".join([f"{h['role']}: {h['text']}" for h in historico])
         
         prompt_sistema = f"""
         Você é o assistente inteligente do EloStock. Usuário: {usuario_atual}.
-        
-        Histórico recente da conversa:
-        {hist_str}
-
-        REGRAS DE INTELEGÊNCIA:
-        1. Se o usuário pedir algo genérico como "retirei cadernos", o sistema de busca vai tentar achar o melhor produto.
-        2. Se a função retornar que atualizou um produto com nome diferente (ex: usuário disse "cadernos", sistema achou "Caderno Executivo"), INFORME ISSO CLARAMENTE ao usuário na resposta final. Diga "Entendi que você quis dizer X".
-        3. SEMPRE passe '{usuario_atual}' no argumento 'usuario' das funções.
-        4. Números: "peguei 5" = -5 (retirada). "chegou 5" = +5 (entrada).
+        Histórico recente: {hist_str}
+        REGRAS: 1. Busque produto com precisão. 2. Informe se usou nome diferente. 3. Passe '{usuario_atual}' no usuario das tools.
         """
         
         chat = model.start_chat(enable_automatic_function_calling=True)
         response = chat.send_message(f"{prompt_sistema}\nUsuário diz: {user_msg}")
         
-        # Salva no histórico
         historico.append({"role": "user", "text": user_msg})
         historico.append({"role": "assistant", "text": response.text})
         session['chat_history'] = historico
@@ -418,15 +510,12 @@ def api_chat():
 @app.route('/elostock/acao/<tipo>/<int:id>', methods=['GET', 'POST'])
 def acao(tipo, id):
     if 'user_email' not in session: return redirect('/elostock/')
-    
     role = session.get('user_role', 'PUBLIC')
-    if tipo == 'produto' and role == 'VENDAS': return "⛔ Acesso Negado"
-    if tipo == 'amostra' and role == 'COMPRAS': return "⛔ Acesso Negado"
-
     msg_sucesso = None
     item = None
 
     if tipo == 'produto':
+        if role == 'VENDAS': return "⛔ Acesso Negado"
         item = Produto.query.get_or_404(id)
         if request.method == 'POST':
             qtd = int(request.form.get('qtd', 1))
@@ -436,6 +525,7 @@ def acao(tipo, id):
             msg_sucesso = f"Retirado {qtd} un de {item.nome}."
 
     elif tipo == 'amostra':
+        if role == 'COMPRAS': return "⛔ Acesso Negado"
         item = Amostra.query.get_or_404(id)
         if request.method == 'POST':
             acao_realizada = request.form.get('acao_amostra')
