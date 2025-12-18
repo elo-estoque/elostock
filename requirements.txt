@@ -7,4 +7,4 @@ slack-bolt==1.18.1
 gunicorn==21.2.0
 requests==2.31.0
 schedule==1.2.1
-WeasyPrint==60.1
+reportlab==4.0.8
