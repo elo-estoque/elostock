@@ -12,6 +12,7 @@ import requests
 import urllib3
 import json
 import smtplib
+import io # Importante para o PDF em memória
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
@@ -23,13 +24,12 @@ from slack_bolt.adapter.flask import SlackRequestHandler
 import google.generativeai as genai
 from google.generativeai.types import FunctionDeclaration, Tool
 
-# Tenta importar WeasyPrint para PDF (se falhar, avisa no log mas não quebra o app todo)
-try:
-    from weasyprint import HTML
-    HAS_WEASYPRINT = True
-except ImportError:
-    HAS_WEASYPRINT = False
-    print("⚠️ AVISO: WeasyPrint não instalado. Geração de PDF não funcionará.")
+# --- REPORTLAB (A SOLUÇÃO DO LEANTTRO) ---
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.units import cm
 
 # --- CONFIGURAÇÃO ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -47,11 +47,11 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
 
-# Configuração de E-mail (Adicione estas env vars no seu Dokploy se quiser que funcione real)
+# Configuração de E-mail
 SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = os.environ.get("SMTP_PORT", 587)
-SMTP_USER = os.environ.get("SMTP_USER")     # Seu email
-SMTP_PASS = os.environ.get("SMTP_PASS")     # Sua senha de app
+SMTP_USER = os.environ.get("SMTP_USER")     
+SMTP_PASS = os.environ.get("SMTP_PASS")     
 EMAIL_CHEFE = os.environ.get("EMAIL_CHEFE", "chefe@elobrindes.com.br")
 
 # Configuração Slack
@@ -110,13 +110,13 @@ class Protocolo(db.Model):
     cliente_email = db.Column(db.String(150))
     cliente_telefone = db.Column(db.String(50))
     cliente_endereco = db.Column(db.Text)
-    itens_json = db.Column(db.JSON) # Armazena lista de itens: [{'sku':..., 'nome':..., 'qtd':...}]
+    itens_json = db.Column(db.JSON) 
     status = db.Column(db.String(50), default='ABERTO')
     arquivo_pdf = db.Column(db.String(255))
     data_criacao = db.Column(db.DateTime, default=datetime.now)
     data_prevista_devolucao = db.Column(db.DateTime)
 
-# --- FUNÇÃO DE BUSCA INTELIGENTE (Fuzzy Match) ---
+# --- FUNÇÃO DE BUSCA INTELIGENTE ---
 def encontrar_produto_inteligente(termo_busca):
     termo_limpo = termo_busca.strip()
     produto = Produto.query.filter(or_(
@@ -124,14 +124,12 @@ def encontrar_produto_inteligente(termo_busca):
         Produto.sku_produtos.ilike(f'%{termo_limpo}%')
     )).first()
     
-    if produto:
-        return produto, None 
+    if produto: return produto, None 
 
     if termo_limpo.lower().endswith('s'):
         termo_singular = termo_limpo[:-1]
         produto = Produto.query.filter(Produto.nome.ilike(f'%{termo_singular}%')).first()
-        if produto:
-            return produto, f"(Assumi que '{termo_limpo}' era '{produto.nome}')"
+        if produto: return produto, f"(Assumi que '{termo_limpo}' era '{produto.nome}')"
 
     todos_produtos = db.session.query(Produto.id, Produto.nome).all()
     nomes_db = [p.nome for p in todos_produtos]
@@ -217,76 +215,91 @@ if GEMINI_API_KEY:
     except Exception as e:
         print(f"Erro ao configurar GENAI: {e}", flush=True)
 
-# --- UTILS PARA PROTOCOLO (PDF & EMAIL) ---
-def gerar_html_protocolo(protocolo):
-    itens = protocolo.itens_json if protocolo.itens_json else []
-    total = len(itens)
+# --- GERADOR PDF VIA REPORTLAB (ROBUSTO) ---
+def gerar_pdf_protocolo(protocolo):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    elements = []
     
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <style>
-            body {{ font-family: sans-serif; color: #333; }}
-            .header {{ display: flex; justify-content: space-between; border-bottom: 3px solid #E31937; padding-bottom: 10px; margin-bottom: 20px; }}
-            .logo {{ font-size: 24px; font-weight: bold; color: #E31937; }}
-            .box {{ border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; font-size: 12px; }}
-            .title {{ background: #eee; font-weight: bold; padding: 5px; margin-bottom: 5px; }}
-            table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
-            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-            th {{ background-color: #f2f2f2; }}
-            .footer {{ margin-top: 30px; font-size: 10px; text-align: center; color: #777; }}
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <div class="logo">ELO BRINDES</div>
-            <div style="text-align: right;">
-                <h2>PROTOCOLO #{protocolo.id}</h2>
-                <small>Gerado em: {protocolo.data_criacao.strftime('%d/%m/%Y %H:%M')}</small>
-            </div>
-        </div>
+    # Estilos
+    styles = getSampleStyleSheet()
+    title_style = styles['Heading1']
+    title_style.alignment = 1 # Center
+    normal_style = styles['Normal']
 
-        <div class="box">
-            <div class="title">DADOS DO VENDEDOR</div>
-            <strong>Vendedor:</strong> {protocolo.vendedor_email} <br>
-            <strong>Data Devolução Prevista:</strong> {protocolo.data_prevista_devolucao.strftime('%d/%m/%Y') if protocolo.data_prevista_devolucao else 'N/A'}
-        </div>
-
-        <div class="box">
-            <div class="title">DADOS DO CLIENTE</div>
-            <strong>Empresa:</strong> {protocolo.cliente_empresa} <br>
-            <strong>Nome:</strong> {protocolo.cliente_nome} | <strong>CNPJ:</strong> {protocolo.cliente_cnpj} <br>
-            <strong>Email:</strong> {protocolo.cliente_email} | <strong>Tel:</strong> {protocolo.cliente_telefone} <br>
-            <strong>Endereço:</strong> {protocolo.cliente_endereco}
-        </div>
-
-        <h3>Itens Solicitados</h3>
-        <table>
-            <thead>
-                <tr>
-                    <th>SKU / Código</th>
-                    <th>Produto / Descrição</th>
-                    <th>Quantidade</th>
-                </tr>
-            </thead>
-            <tbody>
-    """
-    for item in itens:
-        html += f"<tr><td>{item.get('sku', '-')}</td><td>{item.get('nome', 'Item')}</td><td>{item.get('qtd', 1)}</td></tr>"
+    # 1. Cabeçalho
+    elements.append(Paragraph("<b>ELO BRINDES - PROTOCOLO DE AMOSTRA</b>", title_style))
+    elements.append(Spacer(1, 0.5 * cm))
     
-    html += """
-            </tbody>
-        </table>
-        
-        <div class="footer">
-            <p>Este documento comprova a saída dos materiais acima listados para fins de demonstração/amostra.</p>
-            <p>Elo Brindes - Sistema EloStock</p>
-        </div>
-    </body>
-    </html>
-    """
-    return html
+    # 2. Dados Gerais (Tabela Superior)
+    dados_topo = [
+        [f"Protocolo: #{protocolo.id}", f"Data: {protocolo.data_criacao.strftime('%d/%m/%Y')}"],
+        [f"Vendedor: {protocolo.vendedor_email}", f"Devolução: {protocolo.data_prevista_devolucao.strftime('%d/%m/%Y')}"]
+    ]
+    t_topo = Table(dados_topo, colWidths=[10*cm, 8*cm])
+    t_topo.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.lightgrey),
+        ('GRID', (0,0), (-1,-1), 1, colors.white),
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica-Bold'),
+        ('PADDING', (0,0), (-1,-1), 6),
+    ]))
+    elements.append(t_topo)
+    elements.append(Spacer(1, 0.5 * cm))
+
+    # 3. Dados do Cliente
+    elements.append(Paragraph("<b>DADOS DO CLIENTE</b>", styles['Heading4']))
+    dados_cliente = [
+        ["Empresa:", protocolo.cliente_empresa],
+        ["Contato:", protocolo.cliente_nome],
+        ["CNPJ:", protocolo.cliente_cnpj],
+        ["Email:", protocolo.cliente_email],
+        ["Telefone:", protocolo.cliente_telefone],
+        ["Endereço:", protocolo.cliente_endereco]
+    ]
+    t_cliente = Table(dados_cliente, colWidths=[4*cm, 14*cm])
+    t_cliente.setStyle(TableStyle([
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold'),
+        ('PADDING', (0,0), (-1,-1), 4),
+    ]))
+    elements.append(t_cliente)
+    elements.append(Spacer(1, 0.5 * cm))
+
+    # 4. Itens (Produtos)
+    elements.append(Paragraph("<b>ITENS SOLICITADOS</b>", styles['Heading4']))
+    
+    # Cabeçalho da Tabela de Itens
+    data_itens = [['SKU', 'PRODUTO / DESCRIÇÃO', 'QTD']]
+    
+    if protocolo.itens_json:
+        for item in protocolo.itens_json:
+            data_itens.append([
+                item.get('sku', '-'),
+                item.get('nome', 'Item sem nome'),
+                str(item.get('qtd', 1))
+            ])
+    
+    t_itens = Table(data_itens, colWidths=[4*cm, 11*cm, 3*cm])
+    t_itens.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.darkred), # Cabeçalho Vinho
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('ALIGN', (1, 0), (1, -1), 'LEFT'), # Nome alinhado a esquerda
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+    ]))
+    elements.append(t_itens)
+    elements.append(Spacer(1, 1 * cm))
+
+    # 5. Footer / Assinatura
+    elements.append(Paragraph("_______________________________________________", title_style))
+    elements.append(Paragraph("Assinatura do Responsável / Recebedor", title_style))
+    
+    # Build
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer.getvalue()
 
 def enviar_email_protocolo(protocolo, pdf_bytes):
     if not SMTP_USER or not SMTP_PASS:
@@ -297,7 +310,7 @@ def enviar_email_protocolo(protocolo, pdf_bytes):
         msg = MIMEMultipart()
         msg['From'] = SMTP_USER
         msg['To'] = f"{protocolo.vendedor_email}, {EMAIL_CHEFE}"
-        msg['Subject'] = f"Protocolo de Amostra #{protocolo.id} - {protocolo.cliente_empresa}"
+        msg['Subject'] = f"Protocolo #{protocolo.id} - {protocolo.cliente_empresa}"
 
         body = f"Olá,\n\nSegue em anexo o protocolo #{protocolo.id} gerado para o cliente {protocolo.cliente_empresa}.\n\nSistema EloStock."
         msg.attach(MIMEText(body, 'plain'))
@@ -380,11 +393,10 @@ def dashboard():
     
     return render_template('index.html', view_mode='dashboard', produtos=produtos, amostras=amostras, categorias=sorted(list(categorias_disponiveis)), search_query=search_query, selected_cat=filter_cat, user=session['user_email'], role=role) 
 
-# --- ROTAS DE PROTOCOLO ---
+# --- ROTAS DE PROTOCOLO (AGORA COM REPORTLAB) ---
 @app.route('/elostock/protocolos')
 def listar_protocolos():
     if 'user_email' not in session: return redirect('/elostock/')
-    # Filtra: se admin vê tudo, se vendedor vê só os seus
     role = session.get('user_role', 'PUBLIC')
     if role == 'ADMINISTRATOR':
         protocolos = Protocolo.query.order_by(Protocolo.id.desc()).all()
@@ -399,22 +411,15 @@ def novo_protocolo():
     
     if request.method == 'POST':
         try:
-            # Coleta dados do form
             data_prevista = datetime.strptime(request.form.get('data_prevista'), '%Y-%m-%d')
-            
-            # Processa itens (Vem como arrays do form)
             skus = request.form.getlist('item_sku[]')
             nomes = request.form.getlist('item_nome[]')
             qtds = request.form.getlist('item_qtd[]')
             
             itens_json = []
             for i in range(len(skus)):
-                if nomes[i].strip(): # Só adiciona se tiver nome
-                    itens_json.append({
-                        "sku": skus[i], 
-                        "nome": nomes[i], 
-                        "qtd": qtds[i]
-                    })
+                if nomes[i].strip(): 
+                    itens_json.append({"sku": skus[i], "nome": nomes[i], "qtd": qtds[i]})
             
             novo = Protocolo(
                 vendedor_email=session['user_email'],
@@ -429,13 +434,11 @@ def novo_protocolo():
             )
             
             db.session.add(novo)
-            db.session.commit() # Comita para gerar o ID
+            db.session.commit() 
             
-            # Gera PDF e Envia Email
-            if HAS_WEASYPRINT:
-                html_content = gerar_html_protocolo(novo)
-                pdf_bytes = HTML(string=html_content).write_pdf()
-                enviar_email_protocolo(novo, pdf_bytes)
+            # GERAÇÃO DO PDF AGORA É 100% PYTHON (REPORTLAB)
+            pdf_bytes = gerar_pdf_protocolo(novo)
+            enviar_email_protocolo(novo, pdf_bytes)
             
             return redirect('/elostock/protocolos')
             
@@ -448,13 +451,11 @@ def novo_protocolo():
 @app.route('/elostock/protocolo/download/<int:id>')
 def download_protocolo(id):
     if 'user_email' not in session: return redirect('/elostock/')
-    if not HAS_WEASYPRINT: return "Erro: Biblioteca de PDF não instalada no servidor."
     
     protocolo = Protocolo.query.get_or_404(id)
-    html_content = gerar_html_protocolo(protocolo)
-    pdf = HTML(string=html_content).write_pdf()
+    pdf_bytes = gerar_pdf_protocolo(protocolo)
     
-    response = make_response(pdf)
+    response = make_response(pdf_bytes)
     response.headers['Content-Type'] = 'application/pdf'
     response.headers['Content-Disposition'] = f'attachment; filename=Protocolo_{protocolo.id}.pdf'
     return response
