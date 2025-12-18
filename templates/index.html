@@ -213,13 +213,17 @@
                                 </div>
                                 {% if a.status == 'DISPONIVEL' %}
                                     <span class="badge bg-success bg-opacity-10 text-success border border-success border-opacity-25">Disponível</span>
+                                {% elif a.status == 'VENDIDO' %}
+                                    <span class="badge bg-info bg-opacity-10 text-info border border-info border-opacity-25">Vendido</span>
+                                {% elif a.status == 'FORA_DE_LINHA' %}
+                                    <span class="badge bg-secondary bg-opacity-10 text-secondary border border-secondary border-opacity-25">Fora de Linha</span>
                                 {% else %}
                                     <span class="badge bg-warning bg-opacity-10 text-warning border border-warning border-opacity-25">Em Rua</span>
                                 {% endif %}
                             </div>
                             {% if a.status == 'DISPONIVEL' %}
                                 <div class="small text-muted mt-2"><i class="bi bi-geo-alt-fill me-1"></i> Local: {{ a.local_fisico or 'Não definido' }}</div>
-                            {% else %}
+                            {% elif a.status == 'EM_RUA' %}
                                 <div class="bg-dark p-2 rounded mt-2 border border-secondary border-opacity-25">
                                     <div class="d-flex justify-content-between small mb-1">
                                         <span class="text-light"><strong>Resp:</strong> {{ a.vendedor_responsavel }}</span>
@@ -318,28 +322,44 @@
                         <input type="number" name="qtd" class="form-control mb-3" value="1" min="1" max="{{ item.quantidade }}">
                         <button type="submit" class="btn btn-primary w-100 py-2">Confirmar</button>
                     {% else %}
+                        
                         {% if item.status == 'DISPONIVEL' %}
-                            <div class="mb-3">
-                                <label class="form-label small text-muted">Cliente Destino</label>
-                                <input type="text" name="cliente_destino" class="form-control" required>
+                            
+                            <div class="mb-4 text-center">
+                                <p class="text-muted small mb-2">Para retirar uma amostra, é obrigatório gerar o protocolo.</p>
+                                <a href="/elostock/protocolo/novo?item_sku={{ item.sku_amostras }}&item_nome={{ item.nome }}" class="btn btn-primary w-100 py-3 fw-bold">
+                                    <i class="bi bi-file-earmark-text-fill me-2"></i> GERAR PROTOCOLO DE SAÍDA
+                                </a>
                             </div>
-                            <div class="mb-3">
-                                <label class="form-label small text-muted">Endereço de Envio</label>
-                                <textarea name="logradouro" class="form-control" rows="2" required></textarea>
+
+                            <hr class="border-secondary opacity-25 my-4">
+
+                            <p class="text-muted small text-center mb-2">Outras ações administrativas</p>
+                            <div class="row g-2">
+                                <div class="col-6">
+                                    <button type="submit" name="acao_amostra" value="vendido" class="btn btn-outline-info w-100 btn-sm">Marcar Vendido</button>
+                                </div>
+                                <div class="col-6">
+                                    <button type="submit" name="acao_amostra" value="fora_linha" class="btn btn-outline-secondary w-100 btn-sm">Fora de Linha</button>
+                                </div>
                             </div>
-                             <div class="mb-4">
-                                <label class="form-label small text-muted">Prazo</label>
-                                <select name="dias_prazo" class="form-select">
-                                    <option value="7">7 dias</option>
-                                    <option value="15">15 dias</option>
-                                </select>
-                            </div>
-                            <input type="hidden" name="acao_amostra" value="retirar">
-                            <button type="submit" class="btn btn-warning w-100 fw-bold py-2 text-dark">Registrar Saída</button>
+
                         {% else %}
-                            <div class="alert alert-warning text-center bg-warning bg-opacity-10 border-warning border-opacity-25 text-warning">Responsável: {{ item.vendedor_responsavel }}</div>
-                            <input type="hidden" name="acao_amostra" value="devolver">
-                            <button type="submit" class="btn btn-success w-100 fw-bold py-2">Registrar Devolução</button>
+                            <div class="alert alert-warning text-center bg-warning bg-opacity-10 border-warning border-opacity-25 text-warning">
+                                Status atual: <strong>{{ item.status }}</strong><br>
+                                Responsável: {{ item.vendedor_responsavel or 'N/A' }}
+                            </div>
+                            
+                            {% if item.status == 'EM_RUA' %}
+                                <input type="hidden" name="acao_amostra" value="devolver">
+                                <button type="submit" class="btn btn-success w-100 fw-bold py-2">Registrar Devolução</button>
+                            {% endif %}
+                            
+                            {% if item.status == 'VENDIDO' or item.status == 'FORA_DE_LINHA' %}
+                                <input type="hidden" name="acao_amostra" value="devolver">
+                                <button type="submit" class="btn btn-outline-light w-100 py-2">Reativar / Devolver ao Estoque</button>
+                            {% endif %}
+
                         {% endif %}
                     {% endif %}
                 </form>
@@ -450,8 +470,7 @@
                                 {% endfor %}
                             </datalist>
 
-                            <div id="items-container">
-                                </div>
+                            <div id="items-container"></div>
                             
                             <div class="text-end">
                                 <button type="button" class="btn btn-outline-secondary btn-sm" onclick="addRow()">+ Adicionar Item</button>
@@ -474,41 +493,39 @@
     </div>
     
     <script>
-        // Dados recebidos do Backend
         const produtosData = {{ produtos_db | tojson }};
 
-        // Função de Preenchimento Automático
+        // Captura parametros de URL para pre-preencher (Vindo do botão "Gerar Protocolo")
+        const urlParams = new URLSearchParams(window.location.search);
+        const preSku = urlParams.get('item_sku') || '';
+        const preNome = urlParams.get('item_nome') || '';
+
         function autoFill(input, type) {
             const row = input.closest('.item-row');
             const val = input.value;
-            
             if(!val) return;
 
             if(type === 'sku') {
                 const prod = produtosData.find(p => p.sku === val);
-                if(prod) {
-                    row.querySelector('.input-nome').value = prod.nome;
-                }
+                if(prod) row.querySelector('.input-nome').value = prod.nome;
             } else if(type === 'nome') {
                 const prod = produtosData.find(p => p.nome === val);
-                if(prod) {
-                    row.querySelector('.input-sku').value = prod.sku;
-                }
+                if(prod) row.querySelector('.input-sku').value = prod.sku;
             }
         }
 
-        function addRow() {
+        function addRow(sku = '', nome = '') {
             const container = document.getElementById('items-container');
             const row = document.createElement('div');
             row.className = 'row g-2 mb-2 item-row';
             row.innerHTML = `
                 <div class="col-3">
                     <input type="text" name="item_sku[]" class="form-control form-control-sm input-sku" 
-                           placeholder="SKU" list="lista-skus" onchange="autoFill(this, 'sku')">
+                           placeholder="SKU" list="lista-skus" value="${sku}" onchange="autoFill(this, 'sku')">
                 </div>
                 <div class="col-6">
                     <input type="text" name="item_nome[]" class="form-control form-control-sm input-nome" 
-                           placeholder="Busque por Nome..." list="lista-nomes" required onchange="autoFill(this, 'nome')">
+                           placeholder="Busque por Nome..." list="lista-nomes" value="${nome}" required onchange="autoFill(this, 'nome')">
                 </div>
                 <div class="col-2">
                     <input type="number" name="item_qtd[]" class="form-control form-control-sm" value="1" min="1">
@@ -524,9 +541,13 @@
             btn.closest('.item-row').remove();
         }
 
-        // Inicia com uma linha vazia
         document.addEventListener("DOMContentLoaded", function() {
-            addRow();
+            // Se veio com parametros, adiciona preenchido, senão adiciona vazio
+            if(preNome || preSku) {
+                addRow(preSku, preNome);
+            } else {
+                addRow();
+            }
         });
     </script>
     {% endif %}
