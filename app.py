@@ -24,7 +24,7 @@ from slack_bolt.adapter.flask import SlackRequestHandler
 import google.generativeai as genai
 from google.generativeai.types import FunctionDeclaration, Tool
 
-# --- REPORTLAB (A SOLUÇÃO DO LEANTTRO) ---
+# --- REPORTLAB (SOLUÇÃO NATIVA PYTHON PARA PDF) ---
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -446,7 +446,13 @@ def novo_protocolo():
             print(f"Erro ao criar protocolo: {e}")
             return f"Erro: {e}"
 
-    return render_template('index.html', view_mode='novo_protocolo', user=session['user_email'])
+    # --- GET: PREPARA DADOS PARA AUTOCOMPLETE ---
+    # Busca apenas os campos necessários para não pesar a memória
+    todos_produtos = Produto.query.with_entities(Produto.sku_produtos, Produto.nome).all()
+    # Cria uma lista de dicionários limpa para o JS
+    lista_produtos = [{"sku": (p.sku_produtos or ""), "nome": p.nome} for p in todos_produtos]
+
+    return render_template('index.html', view_mode='novo_protocolo', user=session['user_email'], produtos_db=lista_produtos)
 
 @app.route('/elostock/protocolo/download/<int:id>')
 def download_protocolo(id):
