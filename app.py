@@ -1,568 +1,527 @@
-import warnings
-# --- SILENCIAR TUDO PARA LIMPAR O LOG ---
-warnings.simplefilter(action='ignore', category=FutureWarning)
-warnings.simplefilter(action='ignore', category=UserWarning)
-
-import os
-import logging
-import traceback 
-import difflib 
-from datetime import datetime, timedelta
-import requests
-import urllib3
-import json
-import smtplib
-import io # Importante para o PDF em memória
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
-from flask import Flask, request, render_template, session, redirect, url_for, jsonify, render_template_string, make_response
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import or_
-from slack_bolt import App as BoltApp
-from slack_bolt.adapter.flask import SlackRequestHandler
-import google.generativeai as genai
-from google.generativeai.types import FunctionDeclaration, Tool
-
-# --- REPORTLAB (SOLUÇÃO NATIVA PYTHON PARA PDF) ---
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.units import cm
-
-# --- CONFIGURAÇÃO ---
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "chave_padrao_segura")
-
-# Banco de Dados
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db = SQLAlchemy(app)
-
-# Variáveis
-DIRECTUS_URL = os.environ.get("DIRECTUS_URL")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
-SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
-
-# Configuração de E-mail
-SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = os.environ.get("SMTP_PORT", 587)
-SMTP_USER = os.environ.get("SMTP_USER")     
-SMTP_PASS = os.environ.get("SMTP_PASS")     
-EMAIL_CHEFE = os.environ.get("EMAIL_CHEFE", "chefe@elobrindes.com.br")
-
-# Configuração Slack
-slack_app = None
-handler = None
-if SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET:
-    try:
-        slack_app = BoltApp(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
-        handler = SlackRequestHandler(slack_app)
-    except Exception as e:
-        print(f"⚠️ Slack não configurado: {e}")
-
-# --- MODELOS ---
-class Produto(db.Model):
-    __tablename__ = 'produtos'
-    id = db.Column(db.Integer, primary_key=True)
-    nome = db.Column(db.String(150))
-    quantidade = db.Column(db.Integer)
-    localizacao = db.Column(db.String(50))
-    estoque_minimo = db.Column(db.Integer, default=5)
-    sku_produtos = db.Column(db.String(100))
-    categoria_produtos = db.Column(db.String(100))
-
-class Amostra(db.Model):
-    __tablename__ = 'amostras'
-    id = db.Column(db.Integer, primary_key=True)
-    nome = db.Column(db.String(150))
-    codigo_patrimonio = db.Column(db.String(50))
-    status = db.Column(db.String(50)) 
-    local_fisico = db.Column(db.String(100))
-    vendedor_responsavel = db.Column(db.String(100))
-    cliente_destino = db.Column(db.String(150))
-    logradouro = db.Column(db.String(255))
-    data_saida = db.Column(db.DateTime)
-    data_prevista_retorno = db.Column(db.DateTime)
-    sku_amostras = db.Column(db.String(100))
-    categoria_amostra = db.Column(db.String(100))
-
-class Log(db.Model):
-    __tablename__ = 'logs_movimentacao'
-    id = db.Column(db.Integer, primary_key=True)
-    tipo_item = db.Column(db.String(20))
-    item_id = db.Column(db.Integer)
-    acao = db.Column(db.String(50))
-    quantidade = db.Column(db.Integer, default=1)
-    usuario_nome = db.Column(db.String(100))
-    data_evento = db.Column(db.DateTime, default=datetime.now)
-
-class Protocolo(db.Model):
-    __tablename__ = 'protocolos'
-    id = db.Column(db.Integer, primary_key=True)
-    vendedor_email = db.Column(db.String(150))
-    cliente_nome = db.Column(db.String(150))
-    cliente_empresa = db.Column(db.String(150))
-    cliente_cnpj = db.Column(db.String(50))
-    cliente_email = db.Column(db.String(150))
-    cliente_telefone = db.Column(db.String(50))
-    cliente_endereco = db.Column(db.Text)
-    itens_json = db.Column(db.JSON) 
-    status = db.Column(db.String(50), default='ABERTO')
-    arquivo_pdf = db.Column(db.String(255))
-    data_criacao = db.Column(db.DateTime, default=datetime.now)
-    data_prevista_devolucao = db.Column(db.DateTime)
-
-# --- FUNÇÃO DE BUSCA INTELIGENTE ---
-def encontrar_produto_inteligente(termo_busca):
-    termo_limpo = termo_busca.strip()
-    produto = Produto.query.filter(or_(
-        Produto.nome.ilike(f'%{termo_limpo}%'),
-        Produto.sku_produtos.ilike(f'%{termo_limpo}%')
-    )).first()
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EloStock Logística</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     
-    if produto: return produto, None 
+    <style>
+        /* --- PALETA ELO ADMIN (DARK MODE) --- */
+        :root {
+            --brand-dark: #050505;
+            --brand-card: #121212;
+            --brand-wine: #E31937;
+            --brand-hover: #C2132F;
+            --text-main: #E5E7EB;
+            --text-muted: #9CA3AF;
+            --border-color: rgba(255, 255, 255, 0.1);
+            --input-bg: rgba(255, 255, 255, 0.05);
+        }
 
-    if termo_limpo.lower().endswith('s'):
-        termo_singular = termo_limpo[:-1]
-        produto = Produto.query.filter(Produto.nome.ilike(f'%{termo_singular}%')).first()
-        if produto: return produto, f"(Assumi que '{termo_limpo}' era '{produto.nome}')"
+        body { 
+            background-color: var(--brand-dark); 
+            color: var(--text-main); 
+            font-family: 'Inter', system-ui, sans-serif; 
+        }
 
-    todos_produtos = db.session.query(Produto.id, Produto.nome).all()
-    nomes_db = [p.nome for p in todos_produtos]
-    matches = difflib.get_close_matches(termo_limpo, nomes_db, n=1, cutoff=0.5)
-    
-    if matches:
-        nome_encontrado = matches[0]
-        produto = Produto.query.filter_by(nome=nome_encontrado).first()
-        return produto, f"(Não achei '{termo_limpo}', mas encontrei '{nome_encontrado}'. Usei esse.)"
+        .content-box { 
+            background: var(--brand-card); 
+            border: 1px solid var(--border-color); 
+            border-radius: 12px; 
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5); 
+            padding: 2rem; 
+            color: var(--text-main);
+        }
+
+        .navbar-dark.bg-dark {
+            background-color: #000 !important;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .form-control, .form-select {
+            background-color: var(--input-bg);
+            border: 1px solid var(--border-color);
+            color: white;
+        }
+        .form-control:focus, .form-select:focus {
+            background-color: rgba(255, 255, 255, 0.1);
+            border-color: var(--brand-wine);
+            color: white;
+            box-shadow: 0 0 0 0.25rem rgba(227, 25, 55, 0.25);
+        }
+        .form-control::placeholder { color: #6c757d; }
+        .input-group-text {
+            background-color: var(--input-bg);
+            border-color: var(--border-color);
+            color: var(--text-muted);
+        }
+
+        .btn-primary {
+            background-color: var(--brand-wine);
+            border-color: var(--brand-wine);
+            font-weight: 600;
+        }
+        .btn-primary:hover {
+            background-color: var(--brand-hover);
+            border-color: var(--brand-hover);
+        }
+        .btn-outline-secondary { color: var(--text-muted); border-color: var(--border-color); }
+        .btn-outline-secondary:hover { background-color: var(--brand-wine); border-color: var(--brand-wine); color: white; }
+        .btn-outline-dark { color: var(--text-main); border-color: var(--border-color); }
+        .btn-outline-dark:hover { background-color: white; color: black; }
         
-    return None, f"Não encontrei nada parecido com '{termo_busca}'."
-
-# --- TOOLS DO GEMINI ---
-def api_alterar_estoque(nome_ou_sku, quantidade, usuario):
-    with app.app_context():
-        produto, msg_extra = encontrar_produto_inteligente(nome_ou_sku)
-        if not produto: return msg_extra
-        try: qtd_int = int(quantidade)
-        except: return "Erro: Quantidade inválida."
-        nova_qtd = produto.quantidade + qtd_int
-        if nova_qtd < 0: return f"Erro: O produto {produto.nome} só tem {produto.quantidade} unidades."
-        produto.quantidade = nova_qtd
-        acao_log = 'CHAT_ENTRADA' if qtd_int > 0 else 'CHAT_SAIDA'
-        db.session.add(Log(tipo_item='produto', item_id=produto.id, acao=acao_log, quantidade=abs(qtd_int), usuario_nome=usuario))
-        db.session.commit()
-        feedback = f"Sucesso! Estoque de {produto.nome} foi para {produto.quantidade}."
-        if msg_extra: feedback += f" {msg_extra}"
-        return feedback
-
-def api_movimentar_amostra(nome_ou_pat, acao, cliente_destino, usuario):
-    with app.app_context():
-        amostra = Amostra.query.filter(or_(
-            Amostra.nome.ilike(f'%{nome_ou_pat}%'),
-            Amostra.codigo_patrimonio.ilike(f'%{nome_ou_pat}%'),
-            Amostra.sku_amostras.ilike(f'%{nome_ou_pat}%')
-        )).first()
-        if not amostra:
-            todos = db.session.query(Amostra.nome).all()
-            nomes = [a.nome for a in todos]
-            matches = difflib.get_close_matches(nome_ou_pat, nomes, n=1, cutoff=0.6)
-            if matches: amostra = Amostra.query.filter_by(nome=matches[0]).first()
-            else: return f"Erro: Amostra '{nome_ou_pat}' não encontrada."
-
-        if acao.lower() == 'retirar':
-            if amostra.status != 'DISPONIVEL': return f"Erro: A amostra {amostra.nome} já está com {amostra.vendedor_responsavel}."
-            amostra.status = 'EM_RUA'
-            amostra.vendedor_responsavel = usuario
-            amostra.cliente_destino = cliente_destino or "Cliente Não Informado"
-            amostra.data_saida = datetime.now()
-            amostra.data_prevista_retorno = datetime.now() + timedelta(days=7)
-            db.session.add(Log(tipo_item='amostra', item_id=amostra.id, acao='CHAT_RETIRADA', usuario_nome=usuario))
+        .card-item { 
+            transition: all 0.2s; 
+            border-bottom: 1px solid var(--border-color) !important; 
+            color: var(--text-main);
+        }
+        .card-item:hover { background-color: rgba(255,255,255,0.03); }
         
-        elif acao.lower() == 'devolver':
-            if amostra.status == 'DISPONIVEL': return f"A amostra {amostra.nome} já consta como disponível."
-            amostra.status = 'DISPONIVEL'
-            amostra.vendedor_responsavel = None
-            amostra.cliente_destino = None
-            db.session.add(Log(tipo_item='amostra', item_id=amostra.id, acao='CHAT_DEVOLUCAO', usuario_nome=usuario))
-        else: return "Ação desconhecida. Use 'retirar' ou 'devolver'."
+        .badge-cat { font-size: 0.75rem; background-color: rgba(255,255,255,0.1); color: var(--text-main); border-radius: 4px; padding: 2px 6px; }
+        .badge-sku { font-size: 0.7rem; color: var(--text-muted); font-family: monospace; }
+        .text-muted { color: var(--text-muted) !important; }
+        .text-secondary { color: #adb5bd !important; }
+        .bg-light { background-color: rgba(255,255,255,0.05) !important; border-bottom: 1px solid var(--border-color); }
+        .border-bottom { border-bottom-color: var(--border-color) !important; }
 
-        db.session.commit()
-        return f"Feito! Amostra {amostra.nome} agora está {amostra.status}."
+        /* CHATBOT */
+        #chat-btn { 
+            background-color: var(--brand-wine); border-color: var(--brand-wine);
+            position: fixed; bottom: 20px; right: 20px; z-index: 1000; width: 60px; height: 60px; border-radius: 50%; font-size: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); 
+        }
+        #chat-window { 
+            background-color: var(--brand-card);
+            position: fixed; bottom: 90px; right: 20px; z-index: 1000; width: 350px; height: 450px; display: none; flex-direction: column; border: 1px solid var(--border-color); border-radius: 15px; overflow: hidden; box-shadow: 0 5px 25px rgba(0,0,0,0.5); 
+        }
+        .chat-header { background: var(--brand-wine); color: white; padding: 15px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
+        .chat-body { flex: 1; background: var(--brand-card); padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; font-size: 0.9rem; }
+        .chat-footer { padding: 10px; background: rgba(0,0,0,0.2); border-top: 1px solid var(--border-color); display: flex; gap: 5px; }
+        .msg { padding: 8px 12px; border-radius: 12px; max-width: 80%; }
+        .msg-user { background: #333; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
+        .msg-ai { background: rgba(227, 25, 55, 0.15); color: #ffb3b3; border: 1px solid rgba(227, 25, 55, 0.3); align-self: flex-start; border-bottom-left-radius: 2px; }
+        .typing { font-size: 0.8rem; color: #777; font-style: italic; display: none; margin-left: 10px; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: var(--brand-dark); }
+        ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+    </style>
+</head>
+<body>
 
-def api_consultar(termo):
-    with app.app_context():
-        p, _ = encontrar_produto_inteligente(termo)
-        res_p = f"Produto: {p.nome} | Qtd: {p.quantidade} | Local: {p.localizacao}" if p else ""
-        a = Amostra.query.filter(Amostra.nome.ilike(f'%{termo}%')).first()
-        if not a:
-            todos = [x.nome for x in db.session.query(Amostra.nome).all()]
-            match = difflib.get_close_matches(termo, todos, n=1, cutoff=0.6)
-            if match: a = Amostra.query.filter_by(nome=match[0]).first()
-        status_a = f"Com {a.vendedor_responsavel}" if a and a.status != 'DISPONIVEL' else "Disponível"
-        res_a = f"Amostra: {a.nome} | Status: {status_a}" if a else ""
-        if not p and not a: return "Não encontrei nada parecido no estoque nem nas amostras."
-        return f"{res_p}\n{res_a}"
+    {% if view_mode == 'login' %}
+    <div class="container d-flex align-items-center justify-content-center" style="height: 100vh;">
+        <div class="content-box text-center" style="width: 100%; max-width: 400px; border-top: 4px solid var(--brand-wine);">
+            <i class="bi bi-shield-lock-fill mb-3" style="font-size: 3rem; color: var(--brand-wine);"></i>
+            <h3 class="fw-bold mb-4 text-white">Acesso Restrito</h3>
+            {% if erro %}<div class="alert alert-danger py-2 small bg-danger bg-opacity-25 text-danger border-danger border-opacity-25">{{ erro }}</div>{% endif %}
+            <form method="POST">
+                <input type="email" name="login_email" class="form-control mb-3" placeholder="E-mail Corporativo" required>
+                <input type="password" name="login_password" class="form-control mb-4" placeholder="Senha" required>
+                <button type="submit" class="btn btn-primary w-100 py-2 fw-bold shadow-lg">ACESSAR SISTEMA</button>
+            </form>
+        </div>
+    </div>
 
-tools_gemini = [api_alterar_estoque, api_movimentar_amostra, api_consultar]
+    {% elif view_mode == 'dashboard' %}
+    <nav class="navbar navbar-dark bg-dark mb-4">
+        <div class="container">
+            <span class="navbar-brand fw-bold">EloStock <span class="badge bg-secondary ms-2" style="font-size: 0.7em; background-color: var(--brand-wine) !important;">{{ role }}</span></span>
+            <div class="d-flex align-items-center gap-3">
+                <a href="/elostock/protocolos" class="btn btn-outline-light btn-sm"><i class="bi bi-file-earmark-pdf"></i> Protocolos</a>
+                <span class="text-white small d-none d-md-block">{{ user }}</span>
+                <a href="/elostock/logout" class="btn btn-outline-secondary btn-sm">Sair</a>
+            </div>
+        </div>
+    </nav>
 
-if GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-    except Exception as e:
-        print(f"Erro ao configurar GENAI: {e}", flush=True)
-
-# --- GERADOR PDF VIA REPORTLAB (ROBUSTO) ---
-def gerar_pdf_protocolo(protocolo):
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
-    elements = []
-    
-    # Estilos
-    styles = getSampleStyleSheet()
-    title_style = styles['Heading1']
-    title_style.alignment = 1 # Center
-    normal_style = styles['Normal']
-
-    # 1. Cabeçalho
-    elements.append(Paragraph("<b>ELO BRINDES - PROTOCOLO DE AMOSTRA</b>", title_style))
-    elements.append(Spacer(1, 0.5 * cm))
-    
-    # 2. Dados Gerais (Tabela Superior)
-    dados_topo = [
-        [f"Protocolo: #{protocolo.id}", f"Data: {protocolo.data_criacao.strftime('%d/%m/%Y')}"],
-        [f"Vendedor: {protocolo.vendedor_email}", f"Devolução: {protocolo.data_prevista_devolucao.strftime('%d/%m/%Y')}"]
-    ]
-    t_topo = Table(dados_topo, colWidths=[10*cm, 8*cm])
-    t_topo.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, -1), colors.lightgrey),
-        ('GRID', (0,0), (-1,-1), 1, colors.white),
-        ('FONTNAME', (0,0), (-1,-1), 'Helvetica-Bold'),
-        ('PADDING', (0,0), (-1,-1), 6),
-    ]))
-    elements.append(t_topo)
-    elements.append(Spacer(1, 0.5 * cm))
-
-    # 3. Dados do Cliente
-    elements.append(Paragraph("<b>DADOS DO CLIENTE</b>", styles['Heading4']))
-    dados_cliente = [
-        ["Empresa:", protocolo.cliente_empresa],
-        ["Contato:", protocolo.cliente_nome],
-        ["CNPJ:", protocolo.cliente_cnpj],
-        ["Email:", protocolo.cliente_email],
-        ["Telefone:", protocolo.cliente_telefone],
-        ["Endereço:", protocolo.cliente_endereco]
-    ]
-    t_cliente = Table(dados_cliente, colWidths=[4*cm, 14*cm])
-    t_cliente.setStyle(TableStyle([
-        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-        ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold'),
-        ('PADDING', (0,0), (-1,-1), 4),
-    ]))
-    elements.append(t_cliente)
-    elements.append(Spacer(1, 0.5 * cm))
-
-    # 4. Itens (Produtos)
-    elements.append(Paragraph("<b>ITENS SOLICITADOS</b>", styles['Heading4']))
-    
-    # Cabeçalho da Tabela de Itens
-    data_itens = [['SKU', 'PRODUTO / DESCRIÇÃO', 'QTD']]
-    
-    if protocolo.itens_json:
-        for item in protocolo.itens_json:
-            data_itens.append([
-                item.get('sku', '-'),
-                item.get('nome', 'Item sem nome'),
-                str(item.get('qtd', 1))
-            ])
-    
-    t_itens = Table(data_itens, colWidths=[4*cm, 11*cm, 3*cm])
-    t_itens.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.darkred), # Cabeçalho Vinho
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('ALIGN', (1, 0), (1, -1), 'LEFT'), # Nome alinhado a esquerda
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
-    ]))
-    elements.append(t_itens)
-    elements.append(Spacer(1, 1 * cm))
-
-    # 5. Footer / Assinatura
-    elements.append(Paragraph("_______________________________________________", title_style))
-    elements.append(Paragraph("Assinatura do Responsável / Recebedor", title_style))
-    
-    # Build
-    doc.build(elements)
-    buffer.seek(0)
-    return buffer.getvalue()
-
-def enviar_email_protocolo(protocolo, pdf_bytes):
-    if not SMTP_USER or not SMTP_PASS:
-        print("⚠️ SMTP não configurado. Email não enviado.")
-        return
-
-    try:
-        msg = MIMEMultipart()
-        msg['From'] = SMTP_USER
-        msg['To'] = f"{protocolo.vendedor_email}, {EMAIL_CHEFE}"
-        msg['Subject'] = f"Protocolo #{protocolo.id} - {protocolo.cliente_empresa}"
-
-        body = f"Olá,\n\nSegue em anexo o protocolo #{protocolo.id} gerado para o cliente {protocolo.cliente_empresa}.\n\nSistema EloStock."
-        msg.attach(MIMEText(body, 'plain'))
-
-        part = MIMEApplication(pdf_bytes, Name=f"Protocolo_{protocolo.id}.pdf")
-        part['Content-Disposition'] = f'attachment; filename="Protocolo_{protocolo.id}.pdf"'
-        msg.attach(part)
-
-        server = smtplib.SMTP(SMTP_SERVER, int(SMTP_PORT))
-        server.starttls()
-        server.login(SMTP_USER, SMTP_PASS)
-        server.sendmail(SMTP_USER, [protocolo.vendedor_email, EMAIL_CHEFE], msg.as_string())
-        server.quit()
-        print(f"📧 Email enviado com sucesso para {protocolo.vendedor_email}")
-    except Exception as e:
-        print(f"❌ Erro ao enviar email: {e}")
-
-# --- ROTAS ---
-
-@app.route('/elostock/', methods=['GET', 'POST'])
-def index():
-    if request.method == 'POST' and 'login_email' in request.form:
-        email = request.form.get('login_email')
-        password = request.form.get('login_password')
-        try:
-            if not DIRECTUS_URL: return render_template('index.html', view_mode='login', erro="Sem URL Directus")
-            resp = requests.post(f"{DIRECTUS_URL}/auth/login", json={"email": email, "password": password}, verify=False)
-            if resp.status_code == 200:
-                token = resp.json()['data']['access_token']
-                session['user_token'] = token
-                session['user_email'] = email
-                session['chat_history'] = [] 
-                headers = {"Authorization": f"Bearer {token}"}
-                user_info = requests.get(f"{DIRECTUS_URL}/users/me?fields=role.name", headers=headers, verify=False)
-                if user_info.status_code == 200:
-                    data = user_info.json().get('data', {})
-                    role_name = data.get('role', {}).get('name', 'Public') if data.get('role') else 'Public'
-                    session['user_role'] = role_name.upper()
-                else:
-                    session['user_role'] = 'PUBLIC'
-                return redirect('/elostock/dashboard')
-            return render_template('index.html', view_mode='login', erro="Credenciais inválidas.")
-        except Exception as e:
-            return render_template('index.html', view_mode='login', erro=f"Erro de Conexão: {str(e)}")
-    if 'user_email' in session: return redirect('/elostock/dashboard')
-    return render_template('index.html', view_mode='login')
-
-@app.route('/elostock/dashboard')
-def dashboard():
-    if 'user_email' not in session: return redirect('/elostock/')
-    role = session.get('user_role', 'PUBLIC')
-    search_query = request.args.get('q', '').strip()
-    filter_cat = request.args.get('cat', '').strip()
-
-    produtos = []
-    amostras = []
-    categorias_disponiveis = set()
-
-    ver_tudo = role == 'ADMINISTRATOR'
-    ver_compras = role == 'COMPRAS' or ver_tudo
-    ver_vendas = role == 'VENDAS' or ver_tudo
-    
-    if ver_compras:
-        query = Produto.query
-        if search_query: query = query.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
-        if filter_cat: query = query.filter(Produto.categoria_produtos == filter_cat)
-        produtos = query.order_by(Produto.nome).all()
-        cats = db.session.query(Produto.categoria_produtos).distinct().all()
-        for c in cats: 
-            if c.categoria_produtos: categorias_disponiveis.add(c.categoria_produtos)
+    <div class="container">
         
-    if ver_vendas:
-        query = Amostra.query
-        if search_query: query = query.filter(or_(Amostra.nome.ilike(f'%{search_query}%'), Amostra.sku_amostras.ilike(f'%{search_query}%')))
-        if filter_cat: query = query.filter(Amostra.categoria_amostra == filter_cat)
-        amostras = query.order_by(Amostra.status.desc(), Amostra.nome).all()
-        cats = db.session.query(Amostra.categoria_amostra).distinct().all()
-        for c in cats: 
-            if c.categoria_amostra: categorias_disponiveis.add(c.categoria_amostra)
+        <div class="content-box py-3 mb-4">
+            <form action="/elostock/dashboard" method="GET" class="row g-3 align-items-center">
+                <div class="col-md-6">
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="bi bi-search"></i></span>
+                        <input type="text" name="q" class="form-control" placeholder="Buscar por Nome ou SKU..." value="{{ search_query }}">
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <select name="cat" class="form-select">
+                        <option value="">Todas as Categorias</option>
+                        {% for c in categorias %}
+                            <option value="{{ c }}" {{ 'selected' if selected_cat == c else '' }}>{{ c }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-2"><button type="submit" class="btn btn-primary w-100 fw-bold">Filtrar</button></div>
+            </form>
+        </div>
+
+        <div class="row g-4 justify-content-center">
+            
+            {% if produtos|length > 0 or role == 'ADMINISTRATOR' and amostras|length == 0 %}
+            <div class="{{ 'col-12' if amostras|length == 0 else 'col-lg-5' }}">
+                <div class="content-box p-0 h-100">
+                    <div class="p-3 border-bottom bg-light rounded-top d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0 fw-bold text-white">📦 Almoxarifado</h6>
+                        <span class="badge bg-secondary">{{ produtos|length }} itens</span>
+                    </div>
+                    <div class="p-3">
+                        {% for p in produtos %}
+                        {% set critico = p.quantidade <= (p.estoque_minimo or 0) %}
+                        <div class="card-item py-3 d-flex justify-content-between align-items-center {{ 'rounded px-2' if critico else '' }}" style="{{ 'background-color: rgba(220, 53, 69, 0.15); border-bottom: none !important;' if critico else '' }}">
+                            <div style="max-width: 70%;">
+                                <div class="fw-bold">{{ p.nome }}</div>
+                                <div class="d-flex gap-2 mt-1">
+                                    {% if p.sku_produtos %}<span class="badge-sku"><i class="bi bi-upc-scan"></i> {{ p.sku_produtos }}</span>{% endif %}
+                                    {% if p.categoria_produtos %}<span class="badge-cat">{{ p.categoria_produtos }}</span>{% endif %}
+                                </div>
+                                <small class="text-muted d-block mt-1">{{ p.localizacao }}</small>
+                            </div>
+                            <div class="text-end">
+                                <div class="h5 mb-0 fw-bold text-white">{{ p.quantidade }}</div>
+                                <a href="/elostock/acao/produto/{{ p.id }}" class="btn btn-link btn-sm p-0 text-decoration-none" style="color: var(--brand-wine);">Retirar</a>
+                            </div>
+                        </div>
+                        {% else %}
+                            <div class="p-4 text-center text-muted">Acesso restrito ou nenhum produto.</div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            {% if amostras|length > 0 or role == 'ADMINISTRATOR' and produtos|length == 0 %}
+            <div class="{{ 'col-12' if produtos|length == 0 else 'col-lg-7' }}">
+                <div class="content-box p-0 h-100">
+                    <div class="p-3 border-bottom bg-light rounded-top d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0 fw-bold text-white">💎 Showroom & Logística</h6>
+                        <span class="badge bg-secondary">{{ amostras|length }} peças</span>
+                    </div>
+                    <div class="p-3">
+                        {% for a in amostras %}
+                        <div class="card-item py-3">
+                            <div class="d-flex justify-content-between align-items-start mb-2">
+                                <div style="max-width: 75%;">
+                                    <h6 class="mb-0 fw-bold">{{ a.nome }}</h6>
+                                    <div class="d-flex gap-2 mt-1 mb-1">
+                                        {% if a.sku_amostras %}<span class="badge-sku"><i class="bi bi-upc-scan"></i> {{ a.sku_amostras }}</span>{% endif %}
+                                        {% if a.categoria_amostra %}<span class="badge-cat">{{ a.categoria_amostra }}</span>{% endif %}
+                                    </div>
+                                    <small class="text-muted">PAT: {{ a.codigo_patrimonio or 'S/N' }}</small>
+                                </div>
+                                {% if a.status == 'DISPONIVEL' %}
+                                    <span class="badge bg-success bg-opacity-10 text-success border border-success border-opacity-25">Disponível</span>
+                                {% else %}
+                                    <span class="badge bg-warning bg-opacity-10 text-warning border border-warning border-opacity-25">Em Rua</span>
+                                {% endif %}
+                            </div>
+                            {% if a.status == 'DISPONIVEL' %}
+                                <div class="small text-muted mt-2"><i class="bi bi-geo-alt-fill me-1"></i> Local: {{ a.local_fisico or 'Não definido' }}</div>
+                            {% else %}
+                                <div class="bg-dark p-2 rounded mt-2 border border-secondary border-opacity-25">
+                                    <div class="d-flex justify-content-between small mb-1">
+                                        <span class="text-light"><strong>Resp:</strong> {{ a.vendedor_responsavel }}</span>
+                                        <span class="text-danger fw-bold">Volta: {{ a.data_prevista_retorno.strftime('%d/%m') if a.data_prevista_retorno else '?' }}</span>
+                                    </div>
+                                    <div class="small text-muted pt-1"><i class="bi bi-truck me-1"></i> Destino: <strong class="text-light">{{ a.cliente_destino or 'Não inf.' }}</strong></div>
+                                </div>
+                            {% endif %}
+                            <a href="/elostock/acao/amostra/{{ a.id }}" class="btn btn-outline-dark btn-sm w-100 mt-2 rounded-pill" style="border-color: rgba(255,255,255,0.2); color: #ccc;">Gerenciar</a>
+                        </div>
+                        {% else %}
+                            <div class="p-4 text-center text-muted">Acesso restrito ou nenhuma amostra.</div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <button id="chat-btn" class="btn btn-primary" onclick="toggleChat()"><i class="bi bi-chat-dots-fill"></i></button>
+    <div id="chat-window" class="content-box p-0">
+        <div class="chat-header">
+            <span>Assistente IA</span>
+            <button type="button" class="btn-close btn-close-white" onclick="toggleChat()"></button>
+        </div>
+        <div class="chat-body" id="chat-msgs">
+            <div class="msg msg-ai">Olá! Eu posso atualizar o estoque ou registrar saída de amostras para você. O que deseja?</div>
+        </div>
+        <div class="typing" id="typing-indicator">IA digitando...</div>
+        <div class="chat-footer">
+            <input type="text" id="chat-input" class="form-control form-control-sm" placeholder="Ex: Retirei 5 cadernos..." onkeypress="handleEnter(event)">
+            <button class="btn btn-primary btn-sm" onclick="sendMessage()"><i class="bi bi-send-fill"></i></button>
+        </div>
+    </div>
+
+    <script>
+        function toggleChat() {
+            const w = document.getElementById('chat-window');
+            w.style.display = w.style.display === 'flex' ? 'none' : 'flex';
+        }
+        function handleEnter(e) { if(e.key === 'Enter') sendMessage(); }
+        async function sendMessage() {
+            const input = document.getElementById('chat-input');
+            const txt = input.value.trim();
+            if(!txt) return;
+            addMsg(txt, 'user');
+            input.value = '';
+            document.getElementById('typing-indicator').style.display = 'block';
+            try {
+                const req = await fetch('/elostock/api/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({message: txt})
+                });
+                const res = await req.json();
+                document.getElementById('typing-indicator').style.display = 'none';
+                addMsg(res.response, 'ai');
+                if(res.response.toLowerCase().includes('sucesso') || res.response.toLowerCase().includes('feito')) {
+                    setTimeout(() => location.reload(), 2000);
+                }
+            } catch(e) {
+                document.getElementById('typing-indicator').style.display = 'none';
+                addMsg("Erro de conexão.", 'ai');
+            }
+        }
+        function addMsg(txt, type) {
+            const div = document.createElement('div');
+            div.className = `msg msg-${type}`;
+            div.innerText = txt;
+            document.getElementById('chat-msgs').appendChild(div);
+            document.getElementById('chat-msgs').scrollTop = document.getElementById('chat-msgs').scrollHeight;
+        }
+    </script>
+
+    {% elif view_mode == 'acao' %}
+    <div class="container d-flex align-items-center justify-content-center" style="min-height: 100vh;">
+        <div class="content-box shadow-lg" style="width: 100%; max-width: 500px;">
+            {% if msg %}
+                <div class="text-center">
+                    <div class="text-success mb-3"><i class="bi bi-check-circle-fill fs-1"></i></div>
+                    <h4 class="text-white">Sucesso!</h4>
+                    <p class="text-muted">{{ msg }}</p>
+                    <a href="/elostock/dashboard" class="btn btn-outline-secondary w-100">Voltar</a>
+                </div>
+            {% else %}
+                <h5 class="text-secondary small text-uppercase mb-1">Gerenciando</h5>
+                <h2 class="fw-bold mb-4 text-white">{{ item.nome }}</h2>
+                <form method="POST">
+                    {% if tipo == 'produto' %}
+                        <div class="text-center mb-4">
+                            <span class="display-5 fw-bold text-white">{{ item.quantidade }}</span>
+                            <span class="text-muted d-block">em estoque</span>
+                        </div>
+                        <label class="fw-bold text-white">Qtd Retirada</label>
+                        <input type="number" name="qtd" class="form-control mb-3" value="1" min="1" max="{{ item.quantidade }}">
+                        <button type="submit" class="btn btn-primary w-100 py-2">Confirmar</button>
+                    {% else %}
+                        {% if item.status == 'DISPONIVEL' %}
+                            <div class="mb-3">
+                                <label class="form-label small text-muted">Cliente Destino</label>
+                                <input type="text" name="cliente_destino" class="form-control" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label small text-muted">Endereço de Envio</label>
+                                <textarea name="logradouro" class="form-control" rows="2" required></textarea>
+                            </div>
+                             <div class="mb-4">
+                                <label class="form-label small text-muted">Prazo</label>
+                                <select name="dias_prazo" class="form-select">
+                                    <option value="7">7 dias</option>
+                                    <option value="15">15 dias</option>
+                                </select>
+                            </div>
+                            <input type="hidden" name="acao_amostra" value="retirar">
+                            <button type="submit" class="btn btn-warning w-100 fw-bold py-2 text-dark">Registrar Saída</button>
+                        {% else %}
+                            <div class="alert alert-warning text-center bg-warning bg-opacity-10 border-warning border-opacity-25 text-warning">Responsável: {{ item.vendedor_responsavel }}</div>
+                            <input type="hidden" name="acao_amostra" value="devolver">
+                            <button type="submit" class="btn btn-success w-100 fw-bold py-2">Registrar Devolução</button>
+                        {% endif %}
+                    {% endif %}
+                </form>
+                <a href="/elostock/dashboard" class="d-block text-center mt-3 text-muted text-decoration-none small">Cancelar</a>
+            {% endif %}
+        </div>
+    </div>
+
+    {% elif view_mode == 'protocolos' %}
+    <nav class="navbar navbar-dark bg-dark mb-4">
+        <div class="container">
+            <span class="navbar-brand fw-bold">EloStock | Protocolos</span>
+            <a href="/elostock/dashboard" class="btn btn-outline-secondary btn-sm">Voltar</a>
+        </div>
+    </nav>
+    <div class="container">
+        <div class="content-box">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h4 class="mb-0 text-white">Meus Protocolos</h4>
+                <a href="/elostock/protocolo/novo" class="btn btn-primary"><i class="bi bi-plus-lg"></i> Novo Protocolo</a>
+            </div>
+            
+            {% if protocolos|length > 0 %}
+                <div class="table-responsive">
+                    <table class="table table-dark table-hover">
+                        <thead>
+                            <tr class="text-muted small text-uppercase">
+                                <th>ID</th>
+                                <th>Cliente</th>
+                                <th>Empresa</th>
+                                <th>Data</th>
+                                <th>Status</th>
+                                <th class="text-end">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for p in protocolos %}
+                            <tr>
+                                <td class="fw-bold text-white">#{{ p.id }}</td>
+                                <td>{{ p.cliente_nome }}</td>
+                                <td>{{ p.cliente_empresa }}</td>
+                                <td>{{ p.data_criacao.strftime('%d/%m/%Y') }}</td>
+                                <td>
+                                    {% if p.status == 'ABERTO' %}<span class="badge bg-warning text-dark">Em Aberto</span>
+                                    {% else %}<span class="badge bg-success">Concluído</span>{% endif %}
+                                </td>
+                                <td class="text-end">
+                                    <a href="/elostock/protocolo/download/{{ p.id }}" class="btn btn-sm btn-outline-light"><i class="bi bi-download"></i> PDF</a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="text-center py-5 text-muted">
+                    <i class="bi bi-folder-x fs-1 mb-3 d-block"></i>
+                    Nenhum protocolo encontrado.
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    {% elif view_mode == 'novo_protocolo' %}
+    <div class="container py-4">
+        <div class="row justify-content-center">
+            <div class="col-lg-8">
+                <div class="content-box">
+                    <h4 class="fw-bold mb-4 text-white border-bottom pb-3">Novo Protocolo de Amostra</h4>
+                    <form method="POST">
+                        <div class="row g-3">
+                            <h6 class="text-muted text-uppercase small mt-4">Dados do Cliente</h6>
+                            <div class="col-md-6">
+                                <label class="form-label small">Nome do Contato</label>
+                                <input type="text" name="cliente_nome" class="form-control" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small">Empresa</label>
+                                <input type="text" name="cliente_empresa" class="form-control" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small">CNPJ</label>
+                                <input type="text" name="cliente_cnpj" class="form-control">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small">Telefone</label>
+                                <input type="text" name="cliente_telefone" class="form-control">
+                            </div>
+                            <div class="col-md-12">
+                                <label class="form-label small">E-mail do Cliente</label>
+                                <input type="email" name="cliente_email" class="form-control" required>
+                            </div>
+                            <div class="col-md-12">
+                                <label class="form-label small">Endereço Completo</label>
+                                <input type="text" name="cliente_endereco" class="form-control" required>
+                            </div>
+
+                            <h6 class="text-muted text-uppercase small mt-4">Itens da Solicitação</h6>
+                            
+                            <datalist id="lista-skus">
+                                {% for p in produtos_db %}
+                                    <option value="{{ p.sku }}">{{ p.nome }}</option>
+                                {% endfor %}
+                            </datalist>
+                            <datalist id="lista-nomes">
+                                {% for p in produtos_db %}
+                                    <option value="{{ p.nome }}" data-sku="{{ p.sku }}">SKU: {{ p.sku }}</option>
+                                {% endfor %}
+                            </datalist>
+
+                            <div id="items-container"></div>
+                            
+                            <div class="text-end">
+                                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="addRow()">+ Adicionar Item</button>
+                            </div>
+
+                            <div class="col-md-6 mt-4">
+                                <label class="form-label small">Data Prevista Devolução</label>
+                                <input type="date" name="data_prevista" class="form-control" required>
+                            </div>
+                        </div>
+
+                        <div class="d-grid gap-2 mt-5">
+                            <button type="submit" class="btn btn-primary fw-bold py-2">GERAR PROTOCOLO & ENVIAR EMAIL</button>
+                            <a href="/elostock/protocolos" class="btn btn-outline-dark">Cancelar</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
     
-    return render_template('index.html', view_mode='dashboard', produtos=produtos, amostras=amostras, categorias=sorted(list(categorias_disponiveis)), search_query=search_query, selected_cat=filter_cat, user=session['user_email'], role=role) 
+    <script>
+        const produtosData = {{ produtos_db | tojson }};
 
-# --- ROTAS DE PROTOCOLO (AGORA COM REPORTLAB) ---
-@app.route('/elostock/protocolos')
-def listar_protocolos():
-    if 'user_email' not in session: return redirect('/elostock/')
-    role = session.get('user_role', 'PUBLIC')
-    if role == 'ADMINISTRATOR':
-        protocolos = Protocolo.query.order_by(Protocolo.id.desc()).all()
-    else:
-        protocolos = Protocolo.query.filter_by(vendedor_email=session['user_email']).order_by(Protocolo.id.desc()).all()
-    
-    return render_template('index.html', view_mode='protocolos', protocolos=protocolos, user=session['user_email'], role=role)
+        function autoFill(input, type) {
+            const row = input.closest('.item-row');
+            const val = input.value;
+            if(!val) return;
 
-@app.route('/elostock/protocolo/novo', methods=['GET', 'POST'])
-def novo_protocolo():
-    if 'user_email' not in session: return redirect('/elostock/')
-    
-    if request.method == 'POST':
-        try:
-            data_prevista = datetime.strptime(request.form.get('data_prevista'), '%Y-%m-%d')
-            skus = request.form.getlist('item_sku[]')
-            nomes = request.form.getlist('item_nome[]')
-            qtds = request.form.getlist('item_qtd[]')
-            
-            itens_json = []
-            for i in range(len(skus)):
-                if nomes[i].strip(): 
-                    itens_json.append({"sku": skus[i], "nome": nomes[i], "qtd": qtds[i]})
-            
-            novo = Protocolo(
-                vendedor_email=session['user_email'],
-                cliente_nome=request.form.get('cliente_nome'),
-                cliente_empresa=request.form.get('cliente_empresa'),
-                cliente_cnpj=request.form.get('cliente_cnpj'),
-                cliente_email=request.form.get('cliente_email'),
-                cliente_telefone=request.form.get('cliente_telefone'),
-                cliente_endereco=request.form.get('cliente_endereco'),
-                data_prevista_devolucao=data_prevista,
-                itens_json=itens_json
-            )
-            
-            db.session.add(novo)
-            db.session.commit() 
-            
-            # GERAÇÃO DO PDF AGORA É 100% PYTHON (REPORTLAB)
-            pdf_bytes = gerar_pdf_protocolo(novo)
-            enviar_email_protocolo(novo, pdf_bytes)
-            
-            return redirect('/elostock/protocolos')
-            
-        except Exception as e:
-            print(f"Erro ao criar protocolo: {e}")
-            return f"Erro: {e}"
+            if(type === 'sku') {
+                const prod = produtosData.find(p => p.sku === val);
+                if(prod) row.querySelector('.input-nome').value = prod.nome;
+            } else if(type === 'nome') {
+                const prod = produtosData.find(p => p.nome === val);
+                if(prod) row.querySelector('.input-sku').value = prod.sku;
+            }
+        }
 
-    # --- GET: PREPARA DADOS PARA AUTOCOMPLETE ---
-    # Busca apenas os campos necessários para não pesar a memória
-    todos_produtos = Produto.query.with_entities(Produto.sku_produtos, Produto.nome).all()
-    # Cria uma lista de dicionários limpa para o JS
-    lista_produtos = [{"sku": (p.sku_produtos or ""), "nome": p.nome} for p in todos_produtos]
+        function addRow() {
+            const container = document.getElementById('items-container');
+            const row = document.createElement('div');
+            row.className = 'row g-2 mb-2 item-row';
+            row.innerHTML = `
+                <div class="col-3">
+                    <input type="text" name="item_sku[]" class="form-control form-control-sm input-sku" 
+                           placeholder="SKU" list="lista-skus" onchange="autoFill(this, 'sku')">
+                </div>
+                <div class="col-6">
+                    <input type="text" name="item_nome[]" class="form-control form-control-sm input-nome" 
+                           placeholder="Busque por Nome..." list="lista-nomes" required onchange="autoFill(this, 'nome')">
+                </div>
+                <div class="col-2">
+                    <input type="number" name="item_qtd[]" class="form-control form-control-sm" value="1" min="1">
+                </div>
+                <div class="col-1">
+                    <button type="button" class="btn btn-danger btn-sm w-100" onclick="removeRow(this)"><i class="bi bi-x"></i></button>
+                </div>
+            `;
+            container.appendChild(row);
+        }
 
-    return render_template('index.html', view_mode='novo_protocolo', user=session['user_email'], produtos_db=lista_produtos)
+        function removeRow(btn) {
+            btn.closest('.item-row').remove();
+        }
 
-@app.route('/elostock/protocolo/download/<int:id>')
-def download_protocolo(id):
-    if 'user_email' not in session: return redirect('/elostock/')
-    
-    protocolo = Protocolo.query.get_or_404(id)
-    pdf_bytes = gerar_pdf_protocolo(protocolo)
-    
-    response = make_response(pdf_bytes)
-    response.headers['Content-Type'] = 'application/pdf'
-    response.headers['Content-Disposition'] = f'attachment; filename=Protocolo_{protocolo.id}.pdf'
-    return response
+        document.addEventListener("DOMContentLoaded", function() {
+            addRow();
+        });
+    </script>
+    {% endif %}
 
-# --- API CHAT ---
-@app.route('/elostock/api/chat', methods=['POST'])
-def api_chat():
-    if 'user_email' not in session: return jsonify({"response": "Você precisa estar logado."}), 401
-    data = request.json
-    user_msg = data.get('message')
-    usuario_atual = session['user_email']
-    historico = session.get('chat_history', [])
-    if len(historico) > 6: historico = historico[-6:]
-
-    if not GEMINI_API_KEY: return jsonify({"response": "ERRO: GEMINI_API_KEY não configurada."})
-
-    try:
-        modelos_disponiveis = []
-        try:
-            for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods: modelos_disponiveis.append(m.name)
-        except: pass
-        modelo_escolhido = 'models/gemini-1.5-flash' 
-        if modelos_disponiveis:
-            found_flash = next((m for m in modelos_disponiveis if 'flash' in m.lower()), None)
-            if found_flash: modelo_escolhido = found_flash
-            else: modelo_escolhido = modelos_disponiveis[0]
-
-        generation_config = {"temperature": 0.3, "top_p": 0.95, "top_k": 40, "max_output_tokens": 1024, "response_mime_type": "text/plain"}
-        model = genai.GenerativeModel(model_name=modelo_escolhido, tools=tools_gemini, generation_config=generation_config)
-        hist_str = "\n".join([f"{h['role']}: {h['text']}" for h in historico])
-        
-        prompt_sistema = f"""
-        Você é o assistente inteligente do EloStock. Usuário: {usuario_atual}.
-        Histórico recente: {hist_str}
-        REGRAS: 1. Busque produto com precisão. 2. Informe se usou nome diferente. 3. Passe '{usuario_atual}' no usuario das tools.
-        """
-        
-        chat = model.start_chat(enable_automatic_function_calling=True)
-        response = chat.send_message(f"{prompt_sistema}\nUsuário diz: {user_msg}")
-        
-        historico.append({"role": "user", "text": user_msg})
-        historico.append({"role": "assistant", "text": response.text})
-        session['chat_history'] = historico
-
-        return jsonify({"response": response.text})
-
-    except Exception as e:
-        erro_bruto = traceback.format_exc()
-        print(f"❌ ERRO GRAVE NO CHAT: {erro_bruto}", flush=True)
-        return jsonify({"response": f"ERRO TÉCNICO: {str(e)}"})
-
-@app.route('/elostock/acao/<tipo>/<int:id>', methods=['GET', 'POST'])
-def acao(tipo, id):
-    if 'user_email' not in session: return redirect('/elostock/')
-    role = session.get('user_role', 'PUBLIC')
-    msg_sucesso = None
-    item = None
-
-    if tipo == 'produto':
-        if role == 'VENDAS': return "⛔ Acesso Negado"
-        item = Produto.query.get_or_404(id)
-        if request.method == 'POST':
-            qtd = int(request.form.get('qtd', 1))
-            item.quantidade -= qtd
-            db.session.add(Log(tipo_item='produto', item_id=item.id, acao='WEB_RETIRADA', quantidade=qtd, usuario_nome=session['user_email']))
-            db.session.commit()
-            msg_sucesso = f"Retirado {qtd} un de {item.nome}."
-
-    elif tipo == 'amostra':
-        if role == 'COMPRAS': return "⛔ Acesso Negado"
-        item = Amostra.query.get_or_404(id)
-        if request.method == 'POST':
-            acao_realizada = request.form.get('acao_amostra')
-            if acao_realizada == 'retirar':
-                item.status = 'EM_RUA'
-                item.vendedor_responsavel = session['user_email']
-                item.cliente_destino = request.form.get('cliente_destino')
-                item.logradouro = request.form.get('logradouro')
-                item.data_saida = datetime.now()
-                dias = int(request.form.get('dias_prazo', 7))
-                item.data_prevista_retorno = datetime.now() + timedelta(days=dias)
-            elif acao_realizada == 'devolver':
-                item.status = 'DISPONIVEL'
-                item.vendedor_responsavel = None
-                item.cliente_destino = None
-            
-            db.session.add(Log(tipo_item='amostra', item_id=item.id, acao=acao_realizada.upper(), usuario_nome=session['user_email']))
-            db.session.commit()
-            msg_sucesso = "Logística atualizada!"
-
-    return render_template('index.html', view_mode='acao', item=item, tipo=tipo, msg=msg_sucesso)
-
-@app.route('/elostock/logout')
-def logout():
-    session.clear()
-    return redirect('/elostock/')
-
-if slack_app:
-    @app.route("/elostock/slack/events", methods=["POST"])
-    def slack_events(): return handler.handle(request)
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
