@@ -5,14 +5,14 @@ warnings.simplefilter(action='ignore', category=UserWarning)
 
 import os
 import logging
-import traceback
-import difflib
+import traceback 
+import difflib 
 from datetime import datetime, timedelta
 import requests
 import urllib3
 import json
 import smtplib
-import io # Importante para o PDF em memória
+import io 
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
@@ -51,8 +51,8 @@ SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
 # Configuração de E-mail
 SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = os.environ.get("SMTP_PORT", 587)
-SMTP_USER = os.environ.get("SMTP_USER")
-SMTP_PASS = os.environ.get("SMTP_PASS")
+SMTP_USER = os.environ.get("SMTP_USER")     
+SMTP_PASS = os.environ.get("SMTP_PASS")     
 EMAIL_CHEFE = os.environ.get("EMAIL_CHEFE", "chefe@elobrindes.com.br")
 
 # Configuração Slack
@@ -81,7 +81,7 @@ class Amostra(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(150))
     codigo_patrimonio = db.Column(db.String(50))
-    status = db.Column(db.String(50))
+    status = db.Column(db.String(50)) 
     local_fisico = db.Column(db.String(100))
     vendedor_responsavel = db.Column(db.String(100))
     cliente_destino = db.Column(db.String(150))
@@ -111,13 +111,13 @@ class Protocolo(db.Model):
     cliente_email = db.Column(db.String(150))
     cliente_telefone = db.Column(db.String(50))
     cliente_endereco = db.Column(db.Text)
-    itens_json = db.Column(db.JSON)
+    itens_json = db.Column(db.JSON) 
     status = db.Column(db.String(50), default='ABERTO')
     arquivo_pdf = db.Column(db.String(255))
     data_criacao = db.Column(db.DateTime, default=datetime.now)
     data_prevista_devolucao = db.Column(db.DateTime)
 
-# --- FUNÇÃO DE BUSCA INTELIGENTE ---
+# --- BUSCA INTELIGENTE ---
 def encontrar_produto_inteligente(termo_busca):
     termo_limpo = termo_busca.strip()
     produto = Produto.query.filter(or_(
@@ -125,7 +125,7 @@ def encontrar_produto_inteligente(termo_busca):
         Produto.sku_produtos.ilike(f'%{termo_limpo}%')
     )).first()
     
-    if produto: return produto, None
+    if produto: return produto, None 
 
     if termo_limpo.lower().endswith('s'):
         termo_singular = termo_limpo[:-1]
@@ -143,7 +143,7 @@ def encontrar_produto_inteligente(termo_busca):
         
     return None, f"Não encontrei nada parecido com '{termo_busca}'."
 
-# --- TOOLS DO GEMINI ---
+# --- TOOLS GEMINI ---
 def api_alterar_estoque(nome_ou_sku, quantidade, usuario):
     with app.app_context():
         produto, msg_extra = encontrar_produto_inteligente(nome_ou_sku)
@@ -162,11 +162,14 @@ def api_alterar_estoque(nome_ou_sku, quantidade, usuario):
 
 def api_movimentar_amostra(nome_ou_pat, acao, cliente_destino, usuario):
     with app.app_context():
+        # Busca Amostra
         amostra = Amostra.query.filter(or_(
             Amostra.nome.ilike(f'%{nome_ou_pat}%'),
             Amostra.codigo_patrimonio.ilike(f'%{nome_ou_pat}%'),
             Amostra.sku_amostras.ilike(f'%{nome_ou_pat}%')
         )).first()
+        
+        # Fallback Fuzzy
         if not amostra:
             todos = db.session.query(Amostra.nome).all()
             nomes = [a.nome for a in todos]
@@ -175,10 +178,12 @@ def api_movimentar_amostra(nome_ou_pat, acao, cliente_destino, usuario):
             else: return f"Erro: Amostra '{nome_ou_pat}' não encontrada."
 
         if acao.lower() == 'retirar':
+            # AGORA A RETIRADA DEVE SER FEITA VIA PROTOCOLO, MAS O CHAT AINDA PODE FAZER SE FOR URGENTE
+            # MANTEMOS A LÓGICA DO CHAT, MAS NO WEB OBRIGAMOS O PROTOCOLO
             if amostra.status != 'DISPONIVEL': return f"Erro: A amostra {amostra.nome} já está com {amostra.vendedor_responsavel}."
             amostra.status = 'EM_RUA'
             amostra.vendedor_responsavel = usuario
-            amostra.cliente_destino = cliente_destino or "Cliente Não Informado"
+            amostra.cliente_destino = cliente_destino or "Cliente Não Informado (Via Chat)"
             amostra.data_saida = datetime.now()
             amostra.data_prevista_retorno = datetime.now() + timedelta(days=7)
             db.session.add(Log(tipo_item='amostra', item_id=amostra.id, acao='CHAT_RETIRADA', usuario_nome=usuario))
@@ -216,7 +221,7 @@ if GEMINI_API_KEY:
     except Exception as e:
         print(f"Erro ao configurar GENAI: {e}", flush=True)
 
-# --- GERADOR PDF VIA REPORTLAB (ROBUSTO + RODAPÉ) ---
+# --- GERADOR PDF REPORTLAB ---
 def gerar_pdf_protocolo(protocolo):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
@@ -224,19 +229,17 @@ def gerar_pdf_protocolo(protocolo):
     
     # Estilos
     styles = getSampleStyleSheet()
-    
-    # Estilos Personalizados para o Rodapé
     style_title = ParagraphStyle('Title', parent=styles['Heading1'], alignment=TA_CENTER, fontSize=24, spaceAfter=20, textColor=colors.darkred)
     style_center = ParagraphStyle('Center', parent=styles['Normal'], alignment=TA_CENTER, fontSize=10)
     style_warning = ParagraphStyle('Warning', parent=styles['Normal'], alignment=TA_CENTER, fontSize=11, textColor=colors.red, fontName='Helvetica-Bold')
     style_address = ParagraphStyle('Address', parent=styles['Normal'], alignment=TA_CENTER, fontSize=10, textColor=colors.white, backColor=colors.black, borderPadding=8)
 
-    # 1. Cabeçalho
+    # Cabeçalho
     elements.append(Paragraph("<b>ELO BRINDES</b>", style_title))
     elements.append(Paragraph(f"PROTOCOLO DE AMOSTRA <b>#{protocolo.id}</b>", styles['Heading2']))
     elements.append(Spacer(1, 0.5 * cm))
     
-    # 2. Dados Gerais (Tabela Superior)
+    # Dados Gerais
     dados_topo = [
         [f"DATA DE ENVIO: {protocolo.data_criacao.strftime('%d/%m/%Y')}", f"DEVOLUÇÃO PREVISTA: {protocolo.data_prevista_devolucao.strftime('%d/%m/%Y')}"],
         [f"VENDEDOR: {protocolo.vendedor_email}", ""]
@@ -251,7 +254,7 @@ def gerar_pdf_protocolo(protocolo):
     elements.append(t_topo)
     elements.append(Spacer(1, 0.5 * cm))
 
-    # 3. Dados do Cliente
+    # Dados Cliente
     elements.append(Paragraph("<b>DADOS DO CLIENTE</b>", styles['Heading4']))
     dados_cliente = [
         ["Empresa:", protocolo.cliente_empresa],
@@ -270,7 +273,7 @@ def gerar_pdf_protocolo(protocolo):
     elements.append(t_cliente)
     elements.append(Spacer(1, 0.5 * cm))
 
-    # 4. Itens (Produtos)
+    # Itens
     elements.append(Paragraph("<b>ITENS SOLICITADOS</b>", styles['Heading4']))
     data_itens = [['SKU', 'PRODUTO / DESCRIÇÃO', 'QTD']]
     
@@ -294,32 +297,22 @@ def gerar_pdf_protocolo(protocolo):
     ]))
     elements.append(t_itens)
     
-    # 5. RODAPÉ JURÍDICO E CONTATO (ADICIONADO)
+    # Rodapé
     elements.append(Spacer(1, 1.5 * cm))
-    
     elements.append(Paragraph("Caso seja necessário a prorrogação do prazo de devolução, por favor, entre em contato com a vendedora.", style_center))
     elements.append(Spacer(1, 0.2 * cm))
-    
     elements.append(Paragraph("ESTE PROTOCOLO SERÁ USADO COMO COMPROVANTE DE DÉBITO EM CASO DE AQUISIÇÃO, NÃO DEVOLUÇÃO, EXTRAVIO OU AMOSTRAS DANIFICADAS.", style_warning))
     elements.append(Spacer(1, 0.1 * cm))
-    
     elements.append(Paragraph("Tanto a retirada quanto a devolução da amostra são de responsabilidade do cliente.", style_center))
     elements.append(Spacer(1, 1.5 * cm))
-
-    # Assinatura
     elements.append(Paragraph("_____________________________________________________________", style_center))
     elements.append(Paragraph("<b>Retirada Cliente</b>", style_center))
     elements.append(Spacer(1, 0.5 * cm))
-
-    # Contatos
     elements.append(Paragraph("Fone: (11) 2262-9800 / (11) 2949-9387", style_center))
     elements.append(Paragraph("<a href='https://www.elobrindes.com.br' color='blue'>www.elobrindes.com.br</a>", style_center))
     elements.append(Spacer(1, 0.5 * cm))
-    
-    # Barra de Endereço Preta
     elements.append(Paragraph("Rua Paula Ney, 550 - Vila Mariana, São Paulo - SP, 04107-021", style_address))
     
-    # Build
     doc.build(elements)
     buffer.seek(0)
     return buffer.getvalue()
@@ -390,7 +383,19 @@ def dashboard():
 
     produtos = []
     amostras = []
-    categorias_disponiveis = set()
+    
+    # CORREÇÃO DO SELECT DE CATEGORIAS
+    # As consultas distinct() retornam tuplas, precisamos extrair o valor string
+    cats_prod_raw = db.session.query(Produto.categoria_produtos).distinct().all()
+    cats_amos_raw = db.session.query(Amostra.categoria_amostra).distinct().all()
+    
+    cats_set = set()
+    for c in cats_prod_raw:
+        if c[0]: cats_set.add(c[0])
+    for c in cats_amos_raw:
+        if c[0]: cats_set.add(c[0])
+        
+    categorias_disponiveis = sorted(list(cats_set))
 
     ver_tudo = role == 'ADMINISTRATOR'
     ver_compras = role == 'COMPRAS' or ver_tudo
@@ -401,22 +406,15 @@ def dashboard():
         if search_query: query = query.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
         if filter_cat: query = query.filter(Produto.categoria_produtos == filter_cat)
         produtos = query.order_by(Produto.nome).all()
-        cats = db.session.query(Produto.categoria_produtos).distinct().all()
-        for c in cats:
-            if c.categoria_produtos: categorias_disponiveis.add(c.categoria_produtos)
         
     if ver_vendas:
         query = Amostra.query
         if search_query: query = query.filter(or_(Amostra.nome.ilike(f'%{search_query}%'), Amostra.sku_amostras.ilike(f'%{search_query}%')))
         if filter_cat: query = query.filter(Amostra.categoria_amostra == filter_cat)
         amostras = query.order_by(Amostra.status.desc(), Amostra.nome).all()
-        cats = db.session.query(Amostra.categoria_amostra).distinct().all()
-        for c in cats:
-            if c.categoria_amostra: categorias_disponiveis.add(c.categoria_amostra)
     
-    return render_template('index.html', view_mode='dashboard', produtos=produtos, amostras=amostras, categorias=sorted(list(categorias_disponiveis)), search_query=search_query, selected_cat=filter_cat, user=session['user_email'], role=role)
+    return render_template('index.html', view_mode='dashboard', produtos=produtos, amostras=amostras, categorias=categorias_disponiveis, search_query=search_query, selected_cat=filter_cat, user=session['user_email'], role=role)
 
-# --- ROTAS DE PROTOCOLO (AGORA COM REPORTLAB) ---
 @app.route('/elostock/protocolos')
 def listar_protocolos():
     if 'user_email' not in session: return redirect('/elostock/')
@@ -457,9 +455,35 @@ def novo_protocolo():
             )
             
             db.session.add(novo)
+            
+            # --- ATUALIZAÇÃO AUTOMÁTICA DE STATUS PARA 'EM_RUA' ---
+            # Para cada item do protocolo, tenta achar a amostra e atualizar
+            for item in itens_json:
+                sku = item.get('sku')
+                nome = item.get('nome')
+                
+                amostra_db = None
+                if sku:
+                    amostra_db = Amostra.query.filter_by(sku_amostras=sku).first()
+                
+                if not amostra_db and nome:
+                    amostra_db = Amostra.query.filter(Amostra.nome.ilike(nome)).first()
+                
+                if amostra_db and amostra_db.status == 'DISPONIVEL':
+                    amostra_db.status = 'EM_RUA'
+                    amostra_db.vendedor_responsavel = session['user_email']
+                    amostra_db.cliente_destino = novo.cliente_empresa
+                    amostra_db.data_saida = datetime.now()
+                    amostra_db.data_prevista_retorno = data_prevista
+                    db.session.add(Log(
+                        tipo_item='amostra', 
+                        item_id=amostra_db.id, 
+                        acao='PROTOCOLO_SAIDA', 
+                        usuario_nome=session['user_email']
+                    ))
+
             db.session.commit()
             
-            # GERAÇÃO DO PDF AGORA É 100% PYTHON (REPORTLAB)
             pdf_bytes = gerar_pdf_protocolo(novo)
             enviar_email_protocolo(novo, pdf_bytes)
             
@@ -469,13 +493,25 @@ def novo_protocolo():
             print(f"Erro ao criar protocolo: {e}")
             return f"Erro: {e}"
 
-    # --- GET: PREPARA DADOS PARA AUTOCOMPLETE ---
-    # Busca apenas os campos necessários para não pesar a memória
+    # AUTOCOMPLETE
     todos_produtos = Produto.query.with_entities(Produto.sku_produtos, Produto.nome).all()
-    # Cria uma lista de dicionários limpa para o JS
-    lista_produtos = [{"sku": (p.sku_produtos or ""), "nome": p.nome} for p in todos_produtos]
+    # Adicionamos também as Amostras no autocomplete para facilitar
+    todas_amostras = Amostra.query.with_entities(Amostra.sku_amostras, Amostra.nome).all()
+    
+    lista_final = []
+    seen = set()
+    
+    for p in todos_produtos:
+        if p.nome not in seen:
+            lista_final.append({"sku": (p.sku_produtos or ""), "nome": p.nome})
+            seen.add(p.nome)
+            
+    for a in todas_amostras:
+        if a.nome not in seen:
+            lista_final.append({"sku": (a.sku_amostras or ""), "nome": a.nome})
+            seen.add(a.nome)
 
-    return render_template('index.html', view_mode='novo_protocolo', user=session['user_email'], produtos_db=lista_produtos)
+    return render_template('index.html', view_mode='novo_protocolo', user=session['user_email'], produtos_db=lista_final)
 
 @app.route('/elostock/protocolo/download/<int:id>')
 def download_protocolo(id):
@@ -557,24 +593,33 @@ def acao(tipo, id):
     elif tipo == 'amostra':
         if role == 'COMPRAS': return "⛔ Acesso Negado"
         item = Amostra.query.get_or_404(id)
+        
         if request.method == 'POST':
             acao_realizada = request.form.get('acao_amostra')
-            if acao_realizada == 'retirar':
-                item.status = 'EM_RUA'
-                item.vendedor_responsavel = session['user_email']
-                item.cliente_destino = request.form.get('cliente_destino')
-                item.logradouro = request.form.get('logradouro')
-                item.data_saida = datetime.now()
-                dias = int(request.form.get('dias_prazo', 7))
-                item.data_prevista_retorno = datetime.now() + timedelta(days=dias)
-            elif acao_realizada == 'devolver':
+            
+            # 1. DEVOLUÇÃO
+            if acao_realizada == 'devolver':
                 item.status = 'DISPONIVEL'
                 item.vendedor_responsavel = None
                 item.cliente_destino = None
+                db.session.add(Log(tipo_item='amostra', item_id=item.id, acao='WEB_DEVOLUCAO', usuario_nome=session['user_email']))
             
-            db.session.add(Log(tipo_item='amostra', item_id=item.id, acao=acao_realizada.upper(), usuario_nome=session['user_email']))
+            # 2. VENDIDO
+            elif acao_realizada == 'vendido':
+                item.status = 'VENDIDO'
+                # Mantém quem vendeu como responsável no log
+                item.vendedor_responsavel = session['user_email'] 
+                db.session.add(Log(tipo_item='amostra', item_id=item.id, acao='WEB_VENDIDO', usuario_nome=session['user_email']))
+            
+            # 3. FORA DE LINHA
+            elif acao_realizada == 'fora_linha':
+                item.status = 'FORA_DE_LINHA'
+                db.session.add(Log(tipo_item='amostra', item_id=item.id, acao='WEB_BAIXA', usuario_nome=session['user_email']))
+            
+            # OBS: 'retirar' foi removido daqui pois agora exige protocolo
+            
             db.session.commit()
-            msg_sucesso = "Logística atualizada!"
+            msg_sucesso = "Status atualizado com sucesso!"
 
     return render_template('index.html', view_mode='acao', item=item, tipo=tipo, msg=msg_sucesso)
 
