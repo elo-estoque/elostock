@@ -438,14 +438,21 @@
                             </div>
 
                             <h6 class="text-muted text-uppercase small mt-4">Itens da Solicitação</h6>
+                            
+                            <datalist id="lista-skus">
+                                {% for p in produtos_db %}
+                                    <option value="{{ p.sku }}">{{ p.nome }}</option>
+                                {% endfor %}
+                            </datalist>
+                            <datalist id="lista-nomes">
+                                {% for p in produtos_db %}
+                                    <option value="{{ p.nome }}" data-sku="{{ p.sku }}">SKU: {{ p.sku }}</option>
+                                {% endfor %}
+                            </datalist>
+
                             <div id="items-container">
-                                <div class="row g-2 mb-2 item-row">
-                                    <div class="col-3"><input type="text" name="item_sku[]" class="form-control form-control-sm" placeholder="SKU"></div>
-                                    <div class="col-6"><input type="text" name="item_nome[]" class="form-control form-control-sm" placeholder="Nome do Produto" required></div>
-                                    <div class="col-2"><input type="number" name="item_qtd[]" class="form-control form-control-sm" value="1" min="1"></div>
-                                    <div class="col-1"><button type="button" class="btn btn-danger btn-sm w-100" onclick="removeRow(this)">X</button></div>
                                 </div>
-                            </div>
+                            
                             <div class="text-end">
                                 <button type="button" class="btn btn-outline-secondary btn-sm" onclick="addRow()">+ Adicionar Item</button>
                             </div>
@@ -467,21 +474,60 @@
     </div>
     
     <script>
+        // Dados recebidos do Backend
+        const produtosData = {{ produtos_db | tojson }};
+
+        // Função de Preenchimento Automático
+        function autoFill(input, type) {
+            const row = input.closest('.item-row');
+            const val = input.value;
+            
+            if(!val) return;
+
+            if(type === 'sku') {
+                const prod = produtosData.find(p => p.sku === val);
+                if(prod) {
+                    row.querySelector('.input-nome').value = prod.nome;
+                }
+            } else if(type === 'nome') {
+                const prod = produtosData.find(p => p.nome === val);
+                if(prod) {
+                    row.querySelector('.input-sku').value = prod.sku;
+                }
+            }
+        }
+
         function addRow() {
             const container = document.getElementById('items-container');
             const row = document.createElement('div');
             row.className = 'row g-2 mb-2 item-row';
             row.innerHTML = `
-                <div class="col-3"><input type="text" name="item_sku[]" class="form-control form-control-sm" placeholder="SKU"></div>
-                <div class="col-6"><input type="text" name="item_nome[]" class="form-control form-control-sm" placeholder="Nome do Produto" required></div>
-                <div class="col-2"><input type="number" name="item_qtd[]" class="form-control form-control-sm" value="1" min="1"></div>
-                <div class="col-1"><button type="button" class="btn btn-danger btn-sm w-100" onclick="removeRow(this)">X</button></div>
+                <div class="col-3">
+                    <input type="text" name="item_sku[]" class="form-control form-control-sm input-sku" 
+                           placeholder="SKU" list="lista-skus" onchange="autoFill(this, 'sku')">
+                </div>
+                <div class="col-6">
+                    <input type="text" name="item_nome[]" class="form-control form-control-sm input-nome" 
+                           placeholder="Busque por Nome..." list="lista-nomes" required onchange="autoFill(this, 'nome')">
+                </div>
+                <div class="col-2">
+                    <input type="number" name="item_qtd[]" class="form-control form-control-sm" value="1" min="1">
+                </div>
+                <div class="col-1">
+                    <button type="button" class="btn btn-danger btn-sm w-100" onclick="removeRow(this)"><i class="bi bi-x"></i></button>
+                </div>
             `;
             container.appendChild(row);
         }
+
         function removeRow(btn) {
             btn.closest('.item-row').remove();
         }
+
+        // Inicia com uma linha vazia
+        document.addEventListener("DOMContentLoaded", function() {
+            addRow();
+        });
     </script>
     {% endif %}
 
