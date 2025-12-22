@@ -399,10 +399,9 @@ def dashboard():
     filter_cat = request.args.get('cat', '').strip()
 
     produtos = []
+    produtos_showroom = [] # NOVA LISTA
     amostras = []
     
-    # CORREÇÃO CRÍTICA: LÓGICA ORIGINAL RESTAURADA
-    # As categorias ficam apenas para o filtro simples do combobox, sem mudar a arquitetura
     cats_prod_raw = db.session.query(Produto.categoria_produtos).distinct().all()
     cats_amos_raw = db.session.query(Amostra.categoria_amostra).distinct().all()
     
@@ -418,35 +417,37 @@ def dashboard():
     ver_compras = role == 'COMPRAS' or ver_tudo
     ver_vendas = role == 'VENDAS' or ver_tudo
     
-    # Se for Admin, vê tudo. Se for Compras, vê Produtos. Se for Vendas, vê Amostras.
-    # Exatamente como estava no app(29).py
-    
+    # --- LÓGICA DO ALMOXARIFADO (SEM SHOWROOM) ---
     if ver_compras:
         query = Produto.query
-        
-        # --- FIX: REMOVER ITENS CATEGORIA SHOWROOM DO ALMOXARIFADO ---
-        # Garante que produtos cadastrados no DB Produto com cat=Showroom não poluam a lista de compras
+        # Filtra TUDO que NÃO for Showroom
         query = query.filter(or_(
             Produto.categoria_produtos == None,
             ~Produto.categoria_produtos.ilike('%showroom%')
         ))
-        # -------------------------------------------------------------
-
         if search_query: 
             query = query.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
-        
         if filter_cat: 
             query = query.filter(Produto.categoria_produtos == filter_cat)
-            
         produtos = query.order_by(Produto.nome).all()
         
+    # --- LÓGICA DO SHOWROOM (AMOSTRAS + PRODUTOS DE SHOWROOM) ---
     if ver_vendas:
+        # 1. Pega Produtos de Showroom (que estavam sumidos)
+        query_sp = Produto.query.filter(Produto.categoria_produtos.ilike('%showroom%'))
+        if search_query: 
+            query_sp = query_sp.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
+        if filter_cat:
+             query_sp = query_sp.filter(Produto.categoria_produtos == filter_cat)
+        produtos_showroom = query_sp.order_by(Produto.nome).all()
+
+        # 2. Pega Amostras normais
         query = Amostra.query
         if search_query: query = query.filter(or_(Amostra.nome.ilike(f'%{search_query}%'), Amostra.sku_amostras.ilike(f'%{search_query}%')))
         if filter_cat: query = query.filter(Amostra.categoria_amostra == filter_cat)
         amostras = query.order_by(Amostra.status.desc(), Amostra.nome).all()
     
-    return render_template('index.html', view_mode='dashboard', produtos=produtos, amostras=amostras, categorias=categorias_disponiveis, search_query=search_query, selected_cat=filter_cat, user=session['user_email'], role=role)
+    return render_template('index.html', view_mode='dashboard', produtos=produtos, produtos_showroom=produtos_showroom, amostras=amostras, categorias=categorias_disponiveis, search_query=search_query, selected_cat=filter_cat, user=session['user_email'], role=role)
 
 @app.route('/elostock/protocolos')
 def listar_protocolos():
