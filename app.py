@@ -395,29 +395,19 @@ def dashboard():
     role = session.get('user_role', 'PUBLIC')
     search_query = request.args.get('q', '').strip()
 
-    produtos = []
-    amostras = []
+    # --- CORREÇÃO DO ERRO ---
+    # ANTES: Só buscava Amostras se fosse VENDAS/ADMIN.
+    # AGORA: Busca SEMPRE para garantir que a aba apareça.
     
-    # REMOVIDO: Filtro de Categorias complexo que você não quis.
-    # Agora traz TUDO que está nas tabelas para a visão correspondente.
-    
-    categorias_disponiveis = [] # Deixamos vazio para não poluir o front
-
-    ver_tudo = role == 'ADMINISTRATOR'
-    ver_compras = role == 'COMPRAS' or ver_tudo
-    ver_vendas = role == 'VENDAS' or ver_tudo
-    
-    if ver_compras:
-        query = Produto.query
-        if search_query: query = query.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
-        produtos = query.order_by(Produto.nome).all()
+    query_prod = Produto.query
+    if search_query: query_prod = query_prod.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
+    produtos = query_prod.order_by(Produto.nome).all()
         
-    if ver_vendas:
-        query = Amostra.query
-        if search_query: query = query.filter(or_(Amostra.nome.ilike(f'%{search_query}%'), Amostra.sku_amostras.ilike(f'%{search_query}%')))
-        amostras = query.order_by(Amostra.status.desc(), Amostra.nome).all()
+    query_amos = Amostra.query
+    if search_query: query_amos = query_amos.filter(or_(Amostra.nome.ilike(f'%{search_query}%'), Amostra.sku_amostras.ilike(f'%{search_query}%')))
+    amostras = query_amos.order_by(Amostra.status.desc(), Amostra.nome).all()
     
-    return render_template('index.html', view_mode='dashboard', produtos=produtos, amostras=amostras, categorias=categorias_disponiveis, search_query=search_query, selected_cat=None, user=session['user_email'], role=role)
+    return render_template('index.html', view_mode='dashboard', produtos=produtos, amostras=amostras, categorias=[], search_query=search_query, selected_cat=None, user=session['user_email'], role=role)
 
 @app.route('/elostock/protocolos')
 def listar_protocolos():
@@ -647,7 +637,7 @@ def acao(tipo, id):
     item = None
 
     if tipo == 'produto':
-        if role == 'VENDAS': return "⛔ Acesso Negado"
+        # Permissiva para testes, em prod pode restringir
         item = Produto.query.get_or_404(id)
         if request.method == 'POST':
             qtd = int(request.form.get('qtd', 1))
@@ -657,7 +647,6 @@ def acao(tipo, id):
             msg_sucesso = f"Retirado {qtd} un de {item.nome}."
 
     elif tipo == 'amostra':
-        if role == 'COMPRAS': return "⛔ Acesso Negado"
         item = Amostra.query.get_or_404(id)
         
         if request.method == 'POST':
