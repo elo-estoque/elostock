@@ -74,8 +74,9 @@ class Produto(db.Model):
     localizacao = db.Column(db.String(50))
     estoque_minimo = db.Column(db.Integer, default=5)
     sku_produtos = db.Column(db.String(100))
+    # CATEGORIA: Permite separar 'SHOWROOM' (para clientes) de 'ALMOXARIFADO' (interno)
     categoria_produtos = db.Column(db.String(100))
-    # --- NOVO CAMPO ADICIONADO (Senior Dev Request) ---
+    # PREÇO: Campo essencial para o novo protocolo financeiro
     valor_unitario = db.Column(db.Numeric(10, 2), nullable=True)
 
 class Amostra(db.Model):
