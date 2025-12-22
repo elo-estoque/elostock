@@ -140,21 +140,29 @@
         
         <div class="content-box py-3 mb-4">
             <form action="/elostock/dashboard" method="GET" class="row g-3 align-items-center">
-                <div class="col-md-6">
+                <div class="col-md-5">
                     <div class="input-group">
                         <span class="input-group-text"><i class="bi bi-search"></i></span>
                         <input type="text" name="q" class="form-control" placeholder="Buscar por Nome ou SKU..." value="{{ search_query }}">
                     </div>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-3">
                     <select name="cat" class="form-select">
-                        <option value="">Todas as Categorias</option>
+                        <option value="">Todas Categorias</option>
                         {% for c in categorias %}
                             <option value="{{ c }}" {{ 'selected' if selected_cat == c else '' }}>{{ c }}</option>
                         {% endfor %}
                     </select>
                 </div>
-                <div class="col-md-2"><button type="submit" class="btn btn-primary w-100 fw-bold">Filtrar</button></div>
+                <div class="col-md-3">
+                    <select name="sub" class="form-select">
+                        <option value="">Todas Subcategorias</option>
+                        {% for s in subcategorias %}
+                            <option value="{{ s }}" {{ 'selected' if selected_sub == s else '' }}>{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-1"><button type="submit" class="btn btn-primary w-100 fw-bold"><i class="bi bi-funnel"></i></button></div>
             </form>
         </div>
 
@@ -176,6 +184,7 @@
                                 <div class="d-flex gap-2 mt-1">
                                     {% if p.sku_produtos %}<span class="badge-sku"><i class="bi bi-upc-scan"></i> {{ p.sku_produtos }}</span>{% endif %}
                                     {% if p.categoria_produtos %}<span class="badge-cat">{{ p.categoria_produtos }}</span>{% endif %}
+                                    {% if p.subcategoria %}<span class="badge-cat" style="background-color: rgba(255,255,255,0.05); color: #aaa;">{{ p.subcategoria }}</span>{% endif %}
                                 </div>
                                 <small class="text-muted d-block mt-1">{{ p.localizacao }}</small>
                             </div>
@@ -210,6 +219,7 @@
                                     <div class="d-flex gap-2 mt-1">
                                         {% if p.sku_produtos %}<span class="badge-sku"><i class="bi bi-upc-scan"></i> {{ p.sku_produtos }}</span>{% endif %}
                                         <span class="badge-cat bg-danger bg-opacity-25 text-danger border border-danger border-opacity-25">Showroom</span>
+                                        {% if p.subcategoria %}<span class="badge-cat" style="background-color: rgba(255,255,255,0.05); color: #aaa;">{{ p.subcategoria }}</span>{% endif %}
                                     </div>
                                     <small class="text-muted d-block mt-1">{{ p.localizacao }}</small>
                                 </div>
