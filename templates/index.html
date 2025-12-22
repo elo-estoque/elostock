@@ -160,8 +160,8 @@
 
         <div class="row g-4 justify-content-center">
             
-            {% if produtos|length > 0 or role == 'ADMINISTRATOR' and amostras|length == 0 %}
-            <div class="{{ 'col-12' if amostras|length == 0 else 'col-lg-5' }}">
+            {% if produtos|length > 0 or (role == 'ADMINISTRATOR' and amostras|length == 0 and produtos_showroom|length == 0) %}
+            <div class="{{ 'col-12' if (amostras|length == 0 and produtos_showroom|length == 0) else 'col-lg-5' }}">
                 <div class="content-box p-0 h-100">
                     <div class="p-3 border-bottom bg-light rounded-top d-flex justify-content-between align-items-center">
                         <h6 class="mb-0 fw-bold text-white">📦 Almoxarifado</h6>
@@ -192,51 +192,76 @@
             </div>
             {% endif %}
 
-            {% if amostras|length > 0 or role == 'ADMINISTRATOR' and produtos|length == 0 %}
+            {% if amostras|length > 0 or produtos_showroom|length > 0 or (role == 'ADMINISTRATOR' and produtos|length == 0) %}
             <div class="{{ 'col-12' if produtos|length == 0 else 'col-lg-7' }}">
                 <div class="content-box p-0 h-100">
                     <div class="p-3 border-bottom bg-light rounded-top d-flex justify-content-between align-items-center">
                         <h6 class="mb-0 fw-bold text-white">💎 Showroom & Logística</h6>
-                        <span class="badge bg-secondary">{{ amostras|length }} peças</span>
+                        <span class="badge bg-secondary">{{ amostras|length + produtos_showroom|length }} peças</span>
                     </div>
                     <div class="p-3">
-                        {% for a in amostras %}
-                        <div class="card-item py-3">
-                            <div class="d-flex justify-content-between align-items-start mb-2">
-                                <div style="max-width: 75%;">
-                                    <h6 class="mb-0 fw-bold">{{ a.nome }}</h6>
-                                    <div class="d-flex gap-2 mt-1 mb-1">
-                                        {% if a.sku_amostras %}<span class="badge-sku"><i class="bi bi-upc-scan"></i> {{ a.sku_amostras }}</span>{% endif %}
-                                        {% if a.categoria_amostra %}<span class="badge-cat">{{ a.categoria_amostra }}</span>{% endif %}
+                        
+                        {% if produtos_showroom|length > 0 %}
+                            <h6 class="text-muted small text-uppercase mb-3 mt-1 fw-bold"><i class="bi bi-boxes me-2"></i>Estoque Showroom</h6>
+                            {% for p in produtos_showroom %}
+                            <div class="card-item py-3 d-flex justify-content-between align-items-center">
+                                <div style="max-width: 70%;">
+                                    <div class="fw-bold">{{ p.nome }}</div>
+                                    <div class="d-flex gap-2 mt-1">
+                                        {% if p.sku_produtos %}<span class="badge-sku"><i class="bi bi-upc-scan"></i> {{ p.sku_produtos }}</span>{% endif %}
+                                        <span class="badge-cat bg-danger bg-opacity-25 text-danger border border-danger border-opacity-25">Showroom</span>
                                     </div>
-                                    <small class="text-muted">PAT: {{ a.codigo_patrimonio or 'S/N' }}</small>
+                                    <small class="text-muted d-block mt-1">{{ p.localizacao }}</small>
+                                </div>
+                                <div class="text-end">
+                                    <div class="h5 mb-0 fw-bold text-white">{{ p.quantidade }}</div>
+                                    <a href="/elostock/acao/produto/{{ p.id }}" class="btn btn-link btn-sm p-0 text-decoration-none" style="color: var(--brand-wine);">Retirar</a>
+                                </div>
+                            </div>
+                            {% endfor %}
+                            <hr class="border-secondary opacity-25 my-4">
+                        {% endif %}
+
+                        {% if amostras|length > 0 %}
+                            <h6 class="text-muted small text-uppercase mb-3 fw-bold"><i class="bi bi-truck me-2"></i>Amostras Únicas / Rastreamento</h6>
+                            {% for a in amostras %}
+                            <div class="card-item py-3">
+                                <div class="d-flex justify-content-between align-items-start mb-2">
+                                    <div style="max-width: 75%;">
+                                        <h6 class="mb-0 fw-bold">{{ a.nome }}</h6>
+                                        <div class="d-flex gap-2 mt-1 mb-1">
+                                            {% if a.sku_amostras %}<span class="badge-sku"><i class="bi bi-upc-scan"></i> {{ a.sku_amostras }}</span>{% endif %}
+                                            {% if a.categoria_amostra %}<span class="badge-cat">{{ a.categoria_amostra }}</span>{% endif %}
+                                        </div>
+                                        <small class="text-muted">PAT: {{ a.codigo_patrimonio or 'S/N' }}</small>
+                                    </div>
+                                    {% if a.status == 'DISPONIVEL' %}
+                                        <span class="badge bg-success bg-opacity-10 text-success border border-success border-opacity-25">Disponível</span>
+                                    {% elif a.status == 'VENDIDO' %}
+                                        <span class="badge bg-info bg-opacity-10 text-info border border-info border-opacity-25">Vendido</span>
+                                    {% elif a.status == 'FORA_DE_LINHA' %}
+                                        <span class="badge bg-secondary bg-opacity-10 text-secondary border border-secondary border-opacity-25">Fora de Linha</span>
+                                    {% else %}
+                                        <span class="badge bg-warning bg-opacity-10 text-warning border border-warning border-opacity-25">Em Rua</span>
+                                    {% endif %}
                                 </div>
                                 {% if a.status == 'DISPONIVEL' %}
-                                    <span class="badge bg-success bg-opacity-10 text-success border border-success border-opacity-25">Disponível</span>
-                                {% elif a.status == 'VENDIDO' %}
-                                    <span class="badge bg-info bg-opacity-10 text-info border border-info border-opacity-25">Vendido</span>
-                                {% elif a.status == 'FORA_DE_LINHA' %}
-                                    <span class="badge bg-secondary bg-opacity-10 text-secondary border border-secondary border-opacity-25">Fora de Linha</span>
-                                {% else %}
-                                    <span class="badge bg-warning bg-opacity-10 text-warning border border-warning border-opacity-25">Em Rua</span>
-                                {% endif %}
-                            </div>
-                            {% if a.status == 'DISPONIVEL' %}
-                                <div class="small text-muted mt-2"><i class="bi bi-geo-alt-fill me-1"></i> Local: {{ a.local_fisico or 'Não definido' }}</div>
-                            {% elif a.status == 'EM_RUA' %}
-                                <div class="bg-dark p-2 rounded mt-2 border border-secondary border-opacity-25">
-                                    <div class="d-flex justify-content-between small mb-1">
-                                        <span class="text-light"><strong>Resp:</strong> {{ a.vendedor_responsavel }}</span>
-                                        <span class="text-danger fw-bold">Volta: {{ a.data_prevista_retorno.strftime('%d/%m') if a.data_prevista_retorno else '?' }}</span>
+                                    <div class="small text-muted mt-2"><i class="bi bi-geo-alt-fill me-1"></i> Local: {{ a.local_fisico or 'Não definido' }}</div>
+                                {% elif a.status == 'EM_RUA' %}
+                                    <div class="bg-dark p-2 rounded mt-2 border border-secondary border-opacity-25">
+                                        <div class="d-flex justify-content-between small mb-1">
+                                            <span class="text-light"><strong>Resp:</strong> {{ a.vendedor_responsavel }}</span>
+                                            <span class="text-danger fw-bold">Volta: {{ a.data_prevista_retorno.strftime('%d/%m') if a.data_prevista_retorno else '?' }}</span>
+                                        </div>
+                                        <div class="small text-muted pt-1"><i class="bi bi-truck me-1"></i> Destino: <strong class="text-light">{{ a.cliente_destino or 'Não inf.' }}</strong></div>
                                     </div>
-                                    <div class="small text-muted pt-1"><i class="bi bi-truck me-1"></i> Destino: <strong class="text-light">{{ a.cliente_destino or 'Não inf.' }}</strong></div>
-                                </div>
-                            {% endif %}
-                            <a href="/elostock/acao/amostra/{{ a.id }}" class="btn btn-outline-dark btn-sm w-100 mt-2 rounded-pill" style="border-color: rgba(255,255,255,0.2); color: #ccc;">Gerenciar</a>
-                        </div>
-                        {% else %}
-                            <div class="p-4 text-center text-muted">Acesso restrito ou nenhuma amostra.</div>
-                        {% endfor %}
+                                {% endif %}
+                                <a href="/elostock/acao/amostra/{{ a.id }}" class="btn btn-outline-dark btn-sm w-100 mt-2 rounded-pill" style="border-color: rgba(255,255,255,0.2); color: #ccc;">Gerenciar</a>
+                            </div>
+                            {% endfor %}
+                        {% elif produtos_showroom|length == 0 %}
+                            <div class="p-4 text-center text-muted">Acesso restrito ou nenhuma amostra/produto de showroom.</div>
+                        {% endif %}
                     </div>
                 </div>
             </div>
