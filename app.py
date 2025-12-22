@@ -75,7 +75,8 @@ class Produto(db.Model):
     estoque_minimo = db.Column(db.Integer, default=5)
     sku_produtos = db.Column(db.String(100))
     categoria_produtos = db.Column(db.String(100))
-    # --- ÚNICA MUDANÇA NO MODELO: PREÇO ---
+    # --- NOVOS CAMPOS ---
+    subcategoria = db.Column(db.String(100)) 
     valor_unitario = db.Column(db.Numeric(10, 2), nullable=True)
 
 class Amostra(db.Model):
@@ -397,21 +398,25 @@ def dashboard():
     role = session.get('user_role', 'PUBLIC')
     search_query = request.args.get('q', '').strip()
     filter_cat = request.args.get('cat', '').strip()
+    filter_sub = request.args.get('sub', '').strip() # NOVO FILTRO
 
     produtos = []
-    produtos_showroom = [] # NOVA LISTA
+    produtos_showroom = [] 
     amostras = []
     
+    # 1. Carrega opções de Categorias e Subcategorias
     cats_prod_raw = db.session.query(Produto.categoria_produtos).distinct().all()
     cats_amos_raw = db.session.query(Amostra.categoria_amostra).distinct().all()
-    
+    subs_raw = db.session.query(Produto.subcategoria).distinct().all() # NOVA CONSULTA
+
     cats_set = set()
     for c in cats_prod_raw:
         if c[0]: cats_set.add(c[0])
     for c in cats_amos_raw:
         if c[0]: cats_set.add(c[0])
-        
+    
     categorias_disponiveis = sorted(list(cats_set))
+    subcategorias_disponiveis = sorted([s[0] for s in subs_raw if s[0]]) # NOVA LISTA
 
     ver_tudo = role == 'ADMINISTRATOR'
     ver_compras = role == 'COMPRAS' or ver_tudo
@@ -429,25 +434,37 @@ def dashboard():
             query = query.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
         if filter_cat: 
             query = query.filter(Produto.categoria_produtos == filter_cat)
+        if filter_sub: # APLICA FILTRO SUB
+            query = query.filter(Produto.subcategoria == filter_sub)
+            
         produtos = query.order_by(Produto.nome).all()
         
     # --- LÓGICA DO SHOWROOM (AMOSTRAS + PRODUTOS DE SHOWROOM) ---
     if ver_vendas:
-        # 1. Pega Produtos de Showroom (que estavam sumidos)
+        # 1. Pega Produtos de Showroom
         query_sp = Produto.query.filter(Produto.categoria_produtos.ilike('%showroom%'))
         if search_query: 
             query_sp = query_sp.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
         if filter_cat:
              query_sp = query_sp.filter(Produto.categoria_produtos == filter_cat)
+        if filter_sub: # APLICA FILTRO SUB
+             query_sp = query_sp.filter(Produto.subcategoria == filter_sub)
+             
         produtos_showroom = query_sp.order_by(Produto.nome).all()
 
         # 2. Pega Amostras normais
         query = Amostra.query
         if search_query: query = query.filter(or_(Amostra.nome.ilike(f'%{search_query}%'), Amostra.sku_amostras.ilike(f'%{search_query}%')))
         if filter_cat: query = query.filter(Amostra.categoria_amostra == filter_cat)
+        # Amostras não tem subcategoria ainda, então não filtramos por sub nelas
+        
         amostras = query.order_by(Amostra.status.desc(), Amostra.nome).all()
     
-    return render_template('index.html', view_mode='dashboard', produtos=produtos, produtos_showroom=produtos_showroom, amostras=amostras, categorias=categorias_disponiveis, search_query=search_query, selected_cat=filter_cat, user=session['user_email'], role=role)
+    return render_template('index.html', view_mode='dashboard', 
+                           produtos=produtos, produtos_showroom=produtos_showroom, amostras=amostras, 
+                           categorias=categorias_disponiveis, subcategorias=subcategorias_disponiveis,
+                           search_query=search_query, selected_cat=filter_cat, selected_sub=filter_sub,
+                           user=session['user_email'], role=role)
 
 @app.route('/elostock/protocolos')
 def listar_protocolos():
