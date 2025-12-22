@@ -428,74 +428,6 @@
         <div class="row justify-content-center">
             <div class="col-lg-8">
                 <div class="content-box">
-                    
-                    {% if preview_mode %}
-                    <h4 class="fw-bold mb-4 text-white border-bottom pb-3">Revisão do Protocolo</h4>
-                    <div class="alert alert-info bg-opacity-10 border-info text-info">
-                        <i class="bi bi-info-circle me-2"></i> Por favor, confira os dados e valores antes de confirmar.
-                    </div>
-                    
-                    <div class="row g-3 mb-4">
-                        <div class="col-md-6"><strong>Cliente:</strong> {{ dados_cliente.nome }}</div>
-                        <div class="col-md-6"><strong>Empresa:</strong> {{ dados_cliente.empresa }}</div>
-                        <div class="col-md-6"><strong>Email:</strong> {{ dados_cliente.email }}</div>
-                        <div class="col-md-6"><strong>Data Devolução:</strong> {{ dados_cliente.data_prevista }}</div>
-                    </div>
-
-                    <h5 class="text-white mt-4 border-bottom pb-2">Itens Selecionados</h5>
-                    <div class="table-responsive mb-4">
-                        <table class="table table-dark table-striped table-sm">
-                            <thead>
-                                <tr>
-                                    <th>SKU</th>
-                                    <th>Produto</th>
-                                    <th class="text-center">Qtd</th>
-                                    <th class="text-end">Vl. Unit.</th>
-                                    <th class="text-end">Total</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for item in itens_preview %}
-                                <tr>
-                                    <td>{{ item.sku }}</td>
-                                    <td>{{ item.nome }}</td>
-                                    <td class="text-center">{{ item.qtd }}</td>
-                                    <td class="text-end">R$ {{ "%.2f"|format(item.preco_unit) }}</td>
-                                    <td class="text-end">R$ {{ "%.2f"|format(item.subtotal) }}</td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                            <tfoot>
-                                <tr>
-                                    <td colspan="4" class="text-end fw-bold">TOTAL GERAL:</td>
-                                    <td class="text-end fw-bold text-success">R$ {{ "%.2f"|format(total_geral) }}</td>
-                                </tr>
-                            </tfoot>
-                        </table>
-                    </div>
-
-                    <form method="POST">
-                        <input type="hidden" name="cliente_nome" value="{{ dados_cliente.nome }}">
-                        <input type="hidden" name="cliente_empresa" value="{{ dados_cliente.empresa }}">
-                        <input type="hidden" name="cliente_cnpj" value="{{ dados_cliente.cnpj }}">
-                        <input type="hidden" name="cliente_email" value="{{ dados_cliente.email }}">
-                        <input type="hidden" name="cliente_telefone" value="{{ dados_cliente.telefone }}">
-                        <input type="hidden" name="cliente_endereco" value="{{ dados_cliente.endereco }}">
-                        <input type="hidden" name="data_prevista" value="{{ dados_cliente.data_prevista }}">
-                        
-                        {% for item in itens_preview %}
-                            <input type="hidden" name="item_sku[]" value="{{ item.sku }}">
-                            <input type="hidden" name="item_nome[]" value="{{ item.nome }}">
-                            <input type="hidden" name="item_qtd[]" value="{{ item.qtd }}">
-                        {% endfor %}
-
-                        <div class="d-flex justify-content-between">
-                            <button type="button" class="btn btn-outline-secondary" onclick="history.back()">Voltar e Editar</button>
-                            <button type="submit" name="acao" value="confirmar" class="btn btn-success fw-bold px-5">CONFIRMAR E GERAR</button>
-                        </div>
-                    </form>
-
-                    {% else %}
                     <h4 class="fw-bold mb-4 text-white border-bottom pb-3">Novo Protocolo de Amostra</h4>
                     <form method="POST">
                         <div class="row g-3">
@@ -551,12 +483,10 @@
                         </div>
 
                         <div class="d-grid gap-2 mt-5">
-                            <button type="submit" name="acao" value="revisar" class="btn btn-primary fw-bold py-2">REVISAR PROTOCOLO</button>
+                            <button type="submit" class="btn btn-primary fw-bold py-2">GERAR PROTOCOLO & ENVIAR EMAIL</button>
                             <a href="/elostock/protocolos" class="btn btn-outline-dark">Cancelar</a>
                         </div>
                     </form>
-                    {% endif %}
-
                 </div>
             </div>
         </div>
@@ -613,13 +543,10 @@
 
         document.addEventListener("DOMContentLoaded", function() {
             // Se veio com parametros, adiciona preenchido, senão adiciona vazio
-            // Verifica se está no modo de edição (se o container existe)
-            if(document.getElementById('items-container')) {
-                if(preNome || preSku) {
-                    addRow(preSku, preNome);
-                } else {
-                    addRow();
-                }
+            if(preNome || preSku) {
+                addRow(preSku, preNome);
+            } else {
+                addRow();
             }
         });
     </script>
