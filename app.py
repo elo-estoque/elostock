@@ -75,6 +75,8 @@ class Produto(db.Model):
     estoque_minimo = db.Column(db.Integer, default=5)
     sku_produtos = db.Column(db.String(100))
     categoria_produtos = db.Column(db.String(100))
+    # --- NOVO CAMPO ADICIONADO (Senior Dev Request) ---
+    valor_unitario = db.Column(db.Numeric(10, 2), nullable=True)
 
 class Amostra(db.Model):
     __tablename__ = 'amostras'
@@ -431,67 +433,121 @@ def novo_protocolo():
     if 'user_email' not in session: return redirect('/elostock/')
     
     if request.method == 'POST':
-        try:
-            data_prevista = datetime.strptime(request.form.get('data_prevista'), '%Y-%m-%d')
+        # --- LÓGICA DE REVISÃO E CONFIRMAÇÃO ---
+        acao = request.form.get('acao')
+
+        if acao == 'revisar':
+            # Captura dados brutos para o preview
+            dados_cliente = {
+                'nome': request.form.get('cliente_nome'),
+                'empresa': request.form.get('cliente_empresa'),
+                'cnpj': request.form.get('cliente_cnpj'),
+                'email': request.form.get('cliente_email'),
+                'telefone': request.form.get('cliente_telefone'),
+                'endereco': request.form.get('cliente_endereco'),
+                'data_prevista': request.form.get('data_prevista')
+            }
+            
             skus = request.form.getlist('item_sku[]')
             nomes = request.form.getlist('item_nome[]')
             qtds = request.form.getlist('item_qtd[]')
             
-            itens_json = []
+            itens_preview = []
+            total_geral = 0.0
+            
             for i in range(len(skus)):
                 if nomes[i].strip():
-                    itens_json.append({"sku": skus[i], "nome": nomes[i], "qtd": qtds[i]})
-            
-            novo = Protocolo(
-                vendedor_email=session['user_email'],
-                cliente_nome=request.form.get('cliente_nome'),
-                cliente_empresa=request.form.get('cliente_empresa'),
-                cliente_cnpj=request.form.get('cliente_cnpj'),
-                cliente_email=request.form.get('cliente_email'),
-                cliente_telefone=request.form.get('cliente_telefone'),
-                cliente_endereco=request.form.get('cliente_endereco'),
-                data_prevista_devolucao=data_prevista,
-                itens_json=itens_json
-            )
-            
-            db.session.add(novo)
-            
-            # --- ATUALIZAÇÃO AUTOMÁTICA DE STATUS PARA 'EM_RUA' ---
-            # Para cada item do protocolo, tenta achar a amostra e atualizar
-            for item in itens_json:
-                sku = item.get('sku')
-                nome = item.get('nome')
-                
-                amostra_db = None
-                if sku:
-                    amostra_db = Amostra.query.filter_by(sku_amostras=sku).first()
-                
-                if not amostra_db and nome:
-                    amostra_db = Amostra.query.filter(Amostra.nome.ilike(nome)).first()
-                
-                if amostra_db and amostra_db.status == 'DISPONIVEL':
-                    amostra_db.status = 'EM_RUA'
-                    amostra_db.vendedor_responsavel = session['user_email']
-                    amostra_db.cliente_destino = novo.cliente_empresa
-                    amostra_db.data_saida = datetime.now()
-                    amostra_db.data_prevista_retorno = data_prevista
-                    db.session.add(Log(
-                        tipo_item='amostra', 
-                        item_id=amostra_db.id, 
-                        acao='PROTOCOLO_SAIDA', 
-                        usuario_nome=session['user_email']
-                    ))
+                    qtd_val = int(qtds[i])
+                    # Tenta buscar preço no banco
+                    prod = Produto.query.filter_by(sku_produtos=skus[i]).first()
+                    if not prod:
+                        prod = Produto.query.filter_by(nome=nomes[i]).first()
+                    
+                    preco = float(prod.valor_unitario) if (prod and prod.valor_unitario) else 0.0
+                    subtotal = preco * qtd_val
+                    total_geral += subtotal
+                    
+                    itens_preview.append({
+                        "sku": skus[i], 
+                        "nome": nomes[i], 
+                        "qtd": qtd_val,
+                        "preco_unit": preco,
+                        "subtotal": subtotal
+                    })
 
-            db.session.commit()
-            
-            pdf_bytes = gerar_pdf_protocolo(novo)
-            enviar_email_protocolo(novo, pdf_bytes)
-            
-            return redirect('/elostock/protocolos')
-            
-        except Exception as e:
-            print(f"Erro ao criar protocolo: {e}")
-            return f"Erro: {e}"
+            # Renderiza preview
+            return render_template('index.html', view_mode='novo_protocolo', 
+                                   user=session['user_email'], 
+                                   preview_mode=True,
+                                   dados_cliente=dados_cliente,
+                                   itens_preview=itens_preview,
+                                   total_geral=total_geral,
+                                   produtos_db=[]) 
+
+        elif acao == 'confirmar':
+            # --- CÓDIGO ORIGINAL ENCAPSULADO (NENHUMA LINHA ALTERADA, APENAS INDENTADA) ---
+            try:
+                data_prevista = datetime.strptime(request.form.get('data_prevista'), '%Y-%m-%d')
+                skus = request.form.getlist('item_sku[]')
+                nomes = request.form.getlist('item_nome[]')
+                qtds = request.form.getlist('item_qtd[]')
+                
+                itens_json = []
+                for i in range(len(skus)):
+                    if nomes[i].strip():
+                        itens_json.append({"sku": skus[i], "nome": nomes[i], "qtd": qtds[i]})
+                
+                novo = Protocolo(
+                    vendedor_email=session['user_email'],
+                    cliente_nome=request.form.get('cliente_nome'),
+                    cliente_empresa=request.form.get('cliente_empresa'),
+                    cliente_cnpj=request.form.get('cliente_cnpj'),
+                    cliente_email=request.form.get('cliente_email'),
+                    cliente_telefone=request.form.get('cliente_telefone'),
+                    cliente_endereco=request.form.get('cliente_endereco'),
+                    data_prevista_devolucao=data_prevista,
+                    itens_json=itens_json
+                )
+                
+                db.session.add(novo)
+                
+                # --- ATUALIZAÇÃO AUTOMÁTICA DE STATUS PARA 'EM_RUA' ---
+                # Para cada item do protocolo, tenta achar a amostra e atualizar
+                for item in itens_json:
+                    sku = item.get('sku')
+                    nome = item.get('nome')
+                    
+                    amostra_db = None
+                    if sku:
+                        amostra_db = Amostra.query.filter_by(sku_amostras=sku).first()
+                    
+                    if not amostra_db and nome:
+                        amostra_db = Amostra.query.filter(Amostra.nome.ilike(nome)).first()
+                    
+                    if amostra_db and amostra_db.status == 'DISPONIVEL':
+                        amostra_db.status = 'EM_RUA'
+                        amostra_db.vendedor_responsavel = session['user_email']
+                        amostra_db.cliente_destino = novo.cliente_empresa
+                        amostra_db.data_saida = datetime.now()
+                        amostra_db.data_prevista_retorno = data_prevista
+                        db.session.add(Log(
+                            tipo_item='amostra', 
+                            item_id=amostra_db.id, 
+                            acao='PROTOCOLO_SAIDA', 
+                            usuario_nome=session['user_email']
+                        ))
+
+                db.session.commit()
+                
+                pdf_bytes = gerar_pdf_protocolo(novo)
+                enviar_email_protocolo(novo, pdf_bytes)
+                
+                return redirect('/elostock/protocolos')
+                
+            except Exception as e:
+                print(f"Erro ao criar protocolo: {e}")
+                return f"Erro: {e}"
+            # --- FIM DO BLOCO ENCAPSULADO ---
 
     # AUTOCOMPLETE
     todos_produtos = Produto.query.with_entities(Produto.sku_produtos, Produto.nome).all()
