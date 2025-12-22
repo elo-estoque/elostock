@@ -222,7 +222,7 @@ if GEMINI_API_KEY:
     except Exception as e:
         print(f"Erro ao configurar GENAI: {e}", flush=True)
 
-# --- GERADOR PDF REPORTLAB (ATUALIZADO COM PREÇO) ---
+# --- GERADOR PDF REPORTLAB ---
 def gerar_pdf_protocolo(protocolo):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
@@ -274,7 +274,7 @@ def gerar_pdf_protocolo(protocolo):
     elements.append(t_cliente)
     elements.append(Spacer(1, 0.5 * cm))
 
-    # Itens - AGORA COM COLUNAS DE VALOR
+    # Itens - COM PREÇOS
     elements.append(Paragraph("<b>ITENS SOLICITADOS</b>", styles['Heading4']))
     
     data_itens = [['SKU', 'PRODUTO / DESCRIÇÃO', 'QTD', 'UNIT.', 'TOTAL']]
@@ -283,7 +283,6 @@ def gerar_pdf_protocolo(protocolo):
     
     if protocolo.itens_json:
         for item in protocolo.itens_json:
-            # Recupera valores ou usa 0.0 se não existirem
             val_unit = float(item.get('preco_unit', 0))
             val_total = float(item.get('subtotal', 0))
             total_protocolo += val_total
@@ -398,7 +397,7 @@ def dashboard():
     role = session.get('user_role', 'PUBLIC')
     search_query = request.args.get('q', '').strip()
     filter_cat = request.args.get('cat', '').strip()
-    filter_sub = request.args.get('sub', '').strip() # NOVO FILTRO
+    filter_sub = request.args.get('sub', '').strip() 
 
     produtos = []
     produtos_showroom = [] 
@@ -407,7 +406,7 @@ def dashboard():
     # 1. Carrega opções de Categorias e Subcategorias
     cats_prod_raw = db.session.query(Produto.categoria_produtos).distinct().all()
     cats_amos_raw = db.session.query(Amostra.categoria_amostra).distinct().all()
-    subs_raw = db.session.query(Produto.subcategoria).distinct().all() # NOVA CONSULTA
+    subs_raw = db.session.query(Produto.subcategoria).distinct().all() 
 
     cats_set = set()
     for c in cats_prod_raw:
@@ -416,16 +415,15 @@ def dashboard():
         if c[0]: cats_set.add(c[0])
     
     categorias_disponiveis = sorted(list(cats_set))
-    subcategorias_disponiveis = sorted([s[0] for s in subs_raw if s[0]]) # NOVA LISTA
+    subcategorias_disponiveis = sorted([s[0] for s in subs_raw if s[0]]) 
 
     ver_tudo = role == 'ADMINISTRATOR'
     ver_compras = role == 'COMPRAS' or ver_tudo
     ver_vendas = role == 'VENDAS' or ver_tudo
     
-    # --- LÓGICA DO ALMOXARIFADO (SEM SHOWROOM) ---
+    # --- ALMOXARIFADO (Exceto Showroom) ---
     if ver_compras:
         query = Produto.query
-        # Filtra TUDO que NÃO for Showroom
         query = query.filter(or_(
             Produto.categoria_produtos == None,
             ~Produto.categoria_produtos.ilike('%showroom%')
@@ -434,29 +432,28 @@ def dashboard():
             query = query.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
         if filter_cat: 
             query = query.filter(Produto.categoria_produtos == filter_cat)
-        if filter_sub: # APLICA FILTRO SUB
+        if filter_sub:
             query = query.filter(Produto.subcategoria == filter_sub)
             
         produtos = query.order_by(Produto.nome).all()
         
-    # --- LÓGICA DO SHOWROOM (AMOSTRAS + PRODUTOS DE SHOWROOM) ---
+    # --- SHOWROOM (Produtos Showroom + Amostras) ---
     if ver_vendas:
-        # 1. Pega Produtos de Showroom
+        # Produtos Showroom
         query_sp = Produto.query.filter(Produto.categoria_produtos.ilike('%showroom%'))
         if search_query: 
             query_sp = query_sp.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
         if filter_cat:
              query_sp = query_sp.filter(Produto.categoria_produtos == filter_cat)
-        if filter_sub: # APLICA FILTRO SUB
+        if filter_sub: 
              query_sp = query_sp.filter(Produto.subcategoria == filter_sub)
              
         produtos_showroom = query_sp.order_by(Produto.nome).all()
 
-        # 2. Pega Amostras normais
+        # Amostras Únicas
         query = Amostra.query
         if search_query: query = query.filter(or_(Amostra.nome.ilike(f'%{search_query}%'), Amostra.sku_amostras.ilike(f'%{search_query}%')))
         if filter_cat: query = query.filter(Amostra.categoria_amostra == filter_cat)
-        # Amostras não tem subcategoria ainda, então não filtramos por sub nelas
         
         amostras = query.order_by(Amostra.status.desc(), Amostra.nome).all()
     
@@ -485,7 +482,7 @@ def novo_protocolo():
         acao = request.form.get('acao')
 
         if acao == 'revisar':
-            # Captura dados brutos para o preview
+            # Dados para Preview
             dados_cliente = {
                 'nome': request.form.get('cliente_nome'),
                 'empresa': request.form.get('cliente_empresa'),
@@ -506,10 +503,9 @@ def novo_protocolo():
             for i in range(len(skus)):
                 if nomes[i].strip():
                     qtd_val = int(qtds[i])
-                    # Tenta buscar preço no banco
+                    # Busca preço produto ou amostra? (Preferência Produto tabela)
                     prod = Produto.query.filter_by(sku_produtos=skus[i]).first()
-                    if not prod:
-                        prod = Produto.query.filter_by(nome=nomes[i]).first()
+                    if not prod: prod = Produto.query.filter_by(nome=nomes[i]).first()
                     
                     preco = float(prod.valor_unitario) if (prod and prod.valor_unitario) else 0.0
                     subtotal = preco * qtd_val
@@ -523,7 +519,6 @@ def novo_protocolo():
                         "subtotal": subtotal
                     })
 
-            # Renderiza preview
             return render_template('index.html', view_mode='novo_protocolo', 
                                    user=session['user_email'], 
                                    preview_mode=True,
@@ -543,11 +538,9 @@ def novo_protocolo():
                 for i in range(len(skus)):
                     if nomes[i].strip():
                         qtd_val = int(qtds[i])
-                        # Busca o produto para pegar o preço
                         prod = Produto.query.filter_by(sku_produtos=skus[i]).first()
                         if not prod: prod = Produto.query.filter_by(nome=nomes[i]).first()
                         
-                        # --- CAPTURA O PREÇO DO BANCO ---
                         preco_unit = float(prod.valor_unitario) if (prod and prod.valor_unitario) else 0.0
                         subtotal = preco_unit * qtd_val
                         
@@ -555,7 +548,7 @@ def novo_protocolo():
                             "sku": skus[i], 
                             "nome": nomes[i], 
                             "qtd": qtds[i], 
-                            "preco_unit": preco_unit, # Salva o valor
+                            "preco_unit": preco_unit,
                             "subtotal": subtotal
                         })
                 
@@ -573,17 +566,16 @@ def novo_protocolo():
                 
                 db.session.add(novo)
                 
-                # --- ATUALIZAÇÃO AUTOMÁTICA DE STATUS PARA 'EM_RUA' ---
+                # --- PROCESSAR SAÍDA ---
                 for item in itens_json:
                     sku = item.get('sku')
                     nome = item.get('nome')
-                    
+                    qtd_saida = int(item.get('qtd', 1))
+
+                    # 1. Tenta Amostra Única (Muda Status)
                     amostra_db = None
-                    if sku:
-                        amostra_db = Amostra.query.filter_by(sku_amostras=sku).first()
-                    
-                    if not amostra_db and nome:
-                        amostra_db = Amostra.query.filter(Amostra.nome.ilike(nome)).first()
+                    if sku: amostra_db = Amostra.query.filter_by(sku_amostras=sku).first()
+                    if not amostra_db and nome: amostra_db = Amostra.query.filter(Amostra.nome.ilike(nome)).first()
                     
                     if amostra_db and amostra_db.status == 'DISPONIVEL':
                         amostra_db.status = 'EM_RUA'
@@ -591,12 +583,23 @@ def novo_protocolo():
                         amostra_db.cliente_destino = novo.cliente_empresa
                         amostra_db.data_saida = datetime.now()
                         amostra_db.data_prevista_retorno = data_prevista
-                        db.session.add(Log(
-                            tipo_item='amostra', 
-                            item_id=amostra_db.id, 
-                            acao='PROTOCOLO_SAIDA', 
-                            usuario_nome=session['user_email']
-                        ))
+                        db.session.add(Log(tipo_item='amostra', item_id=amostra_db.id, acao='PROTOCOLO_SAIDA', usuario_nome=session['user_email']))
+                    
+                    # 2. Se não achou amostra única, verifica se é Produto Showroom para baixar estoque
+                    elif not amostra_db:
+                        prod_db = None
+                        if sku: prod_db = Produto.query.filter_by(sku_produtos=sku).first()
+                        if not prod_db and nome: prod_db = Produto.query.filter_by(nome=nome).first()
+                        
+                        if prod_db and 'showroom' in (prod_db.categoria_produtos or '').lower():
+                            prod_db.quantidade -= qtd_saida
+                            db.session.add(Log(
+                                tipo_item='produto_showroom', 
+                                item_id=prod_db.id, 
+                                acao='PROTOCOLO_SAIDA_ESTOQUE', 
+                                quantidade=qtd_saida,
+                                usuario_nome=session['user_email']
+                            ))
 
                 db.session.commit()
                 
@@ -696,14 +699,54 @@ def acao(tipo, id):
     item = None
 
     if tipo == 'produto':
-        if role == 'VENDAS': return "⛔ Acesso Negado"
         item = Produto.query.get_or_404(id)
-        if request.method == 'POST':
-            qtd = int(request.form.get('qtd', 1))
-            item.quantidade -= qtd
-            db.session.add(Log(tipo_item='produto', item_id=item.id, acao='WEB_RETIRADA', quantidade=qtd, usuario_nome=session['user_email']))
-            db.session.commit()
-            msg_sucesso = f"Retirado {qtd} un de {item.nome}."
+        
+        # --- VERIFICAÇÃO SE É SHOWROOM ---
+        # Se for Showroom, não usamos a view padrão de 'produto' (que é só retirar qtd).
+        # Usaremos a view de 'amostra' (para ter os botões de Protocolo, Vendido, etc).
+        is_showroom = 'showroom' in (item.categoria_produtos or '').lower()
+
+        if is_showroom:
+            # Truque: Alteramos visualmente para 'amostra' para ativar o bloco 'else' no HTML
+            tipo_visualizacao = 'amostra' 
+            # Mapeamos os campos para o HTML não quebrar
+            item.sku_amostras = item.sku_produtos
+            item.categoria_amostra = item.categoria_produtos
+            item.status = 'DISPONIVEL' # Força status disponível para aparecerem os botões
+            item.vendedor_responsavel = None
+            item.codigo_patrimonio = None
+
+            if request.method == 'POST':
+                acao_realizada = request.form.get('acao_amostra')
+                
+                # Para produtos showroom, 'Vendido' ou 'Fora de Linha' zera o estoque
+                if acao_realizada == 'fora_linha' or acao_realizada == 'vendido':
+                    qtd_anterior = item.quantidade
+                    item.quantidade = 0
+                    acao_log = 'WEB_BAIXA_VENDIDO' if acao_realizada == 'vendido' else 'WEB_BAIXA_FORA_LINHA'
+                    
+                    db.session.add(Log(
+                        tipo_item='produto_showroom', 
+                        item_id=item.id, 
+                        acao=acao_log, 
+                        quantidade=qtd_anterior, 
+                        usuario_nome=session['user_email']
+                    ))
+                    db.session.commit()
+                    msg_sucesso = "Item de Showroom baixado (Estoque zerado)."
+
+            # Renderiza como se fosse amostra para exibir as opções corretas
+            return render_template('index.html', view_mode='acao', item=item, tipo='amostra', msg=msg_sucesso)
+
+        else:
+            # --- LÓGICA PADRÃO ALMOXARIFADO ---
+            if role == 'VENDAS': return "⛔ Acesso Negado"
+            if request.method == 'POST':
+                qtd = int(request.form.get('qtd', 1))
+                item.quantidade -= qtd
+                db.session.add(Log(tipo_item='produto', item_id=item.id, acao='WEB_RETIRADA', quantidade=qtd, usuario_nome=session['user_email']))
+                db.session.commit()
+                msg_sucesso = f"Retirado {qtd} un de {item.nome}."
 
     elif tipo == 'amostra':
         if role == 'COMPRAS': return "⛔ Acesso Negado"
@@ -712,26 +755,20 @@ def acao(tipo, id):
         if request.method == 'POST':
             acao_realizada = request.form.get('acao_amostra')
             
-            # 1. DEVOLUÇÃO
             if acao_realizada == 'devolver':
                 item.status = 'DISPONIVEL'
                 item.vendedor_responsavel = None
                 item.cliente_destino = None
                 db.session.add(Log(tipo_item='amostra', item_id=item.id, acao='WEB_DEVOLUCAO', usuario_nome=session['user_email']))
             
-            # 2. VENDIDO
             elif acao_realizada == 'vendido':
                 item.status = 'VENDIDO'
-                # Mantém quem vendeu como responsável no log
                 item.vendedor_responsavel = session['user_email'] 
                 db.session.add(Log(tipo_item='amostra', item_id=item.id, acao='WEB_VENDIDO', usuario_nome=session['user_email']))
             
-            # 3. FORA DE LINHA
             elif acao_realizada == 'fora_linha':
                 item.status = 'FORA_DE_LINHA'
                 db.session.add(Log(tipo_item='amostra', item_id=item.id, acao='WEB_BAIXA', usuario_nome=session['user_email']))
-            
-            # OBS: 'retirar' foi removido daqui pois agora exige protocolo
             
             db.session.commit()
             msg_sucesso = "Status atualizado com sucesso!"
