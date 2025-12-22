@@ -30,7 +30,7 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.units import cm
-from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 
 # --- CONFIGURAÇÃO ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -275,27 +275,46 @@ def gerar_pdf_protocolo(protocolo):
     elements.append(t_cliente)
     elements.append(Spacer(1, 0.5 * cm))
 
-    # Itens
+    # Itens - AGORA COM VALORES MONETÁRIOS
     elements.append(Paragraph("<b>ITENS SOLICITADOS</b>", styles['Heading4']))
-    data_itens = [['SKU', 'PRODUTO / DESCRIÇÃO', 'QTD']]
+    
+    # Cabeçalho atualizado para incluir valores
+    data_itens = [['SKU', 'PRODUTO / DESCRIÇÃO', 'QTD', 'UNIT.', 'TOTAL']]
+    
+    total_protocolo = 0.0
     
     if protocolo.itens_json:
         for item in protocolo.itens_json:
+            # Recupera valores ou usa 0.0 se não existirem
+            val_unit = float(item.get('preco_unit', 0))
+            val_total = float(item.get('subtotal', 0))
+            total_protocolo += val_total
+            
             data_itens.append([
                 item.get('sku', '-'),
                 item.get('nome', 'Item sem nome'),
-                str(item.get('qtd', 1))
+                str(item.get('qtd', 1)),
+                f"R$ {val_unit:.2f}",
+                f"R$ {val_total:.2f}"
             ])
+            
+    # Adiciona linha de total geral
+    data_itens.append(['', '', '', 'TOTAL:', f"R$ {total_protocolo:.2f}"])
     
-    t_itens = Table(data_itens, colWidths=[4*cm, 12*cm, 3*cm])
+    # Ajuste de larguras para 5 colunas
+    # Total ~18.5cm
+    t_itens = Table(data_itens, colWidths=[3*cm, 8.5*cm, 2*cm, 2.5*cm, 2.5*cm])
     t_itens.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.darkred),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('ALIGN', (1, 0), (1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('ALIGN', (1, 0), (1, -1), 'LEFT'), # Produto alinhado a esquerda
+        ('ALIGN', (3, 1), (-1, -1), 'RIGHT'), # Valores alinhados a direita
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), # Header negrito
+        ('FONTNAME', (-2, -1), (-1, -1), 'Helvetica-Bold'), # Linha Total negrito
         ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('GRID', (0, 0), (-1, -2), 1, colors.black), # Grid normal
+        ('LINEBELOW', (0, -1), (-1, -1), 1, colors.black), # Linha final
     ]))
     elements.append(t_itens)
     
@@ -485,7 +504,7 @@ def novo_protocolo():
                                    produtos_db=[]) 
 
         elif acao == 'confirmar':
-            # --- CÓDIGO ORIGINAL ENCAPSULADO (NENHUMA LINHA ALTERADA, APENAS INDENTADA) ---
+            # --- CÓDIGO ORIGINAL ENCAPSULADO (NENHUMA LINHA ALTERADA, APENAS INDENTADA E APRIMORADA PARA SALVAR PREÇO) ---
             try:
                 data_prevista = datetime.strptime(request.form.get('data_prevista'), '%Y-%m-%d')
                 skus = request.form.getlist('item_sku[]')
@@ -495,7 +514,21 @@ def novo_protocolo():
                 itens_json = []
                 for i in range(len(skus)):
                     if nomes[i].strip():
-                        itens_json.append({"sku": skus[i], "nome": nomes[i], "qtd": qtds[i]})
+                        # --- MODIFICAÇÃO PARA CAPTURAR O PREÇO AO SALVAR ---
+                        qtd_val = int(qtds[i])
+                        prod = Produto.query.filter_by(sku_produtos=skus[i]).first()
+                        if not prod: prod = Produto.query.filter_by(nome=nomes[i]).first()
+                        
+                        preco_unit = float(prod.valor_unitario) if (prod and prod.valor_unitario) else 0.0
+                        subtotal = preco_unit * qtd_val
+                        
+                        itens_json.append({
+                            "sku": skus[i], 
+                            "nome": nomes[i], 
+                            "qtd": qtds[i], 
+                            "preco_unit": preco_unit, # Salva valor unitário
+                            "subtotal": subtotal      # Salva subtotal
+                        })
                 
                 novo = Protocolo(
                     vendedor_email=session['user_email'],
