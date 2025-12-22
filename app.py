@@ -18,13 +18,13 @@ from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from flask import Flask, request, render_template, session, redirect, url_for, jsonify, render_template_string, make_response
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import or_
+from sqlalchemy import or_, and_
 from slack_bolt import App as BoltApp
 from slack_bolt.adapter.flask import SlackRequestHandler
 import google.generativeai as genai
 from google.generativeai.types import FunctionDeclaration, Tool
 
-# --- REPORTLAB (SOLUÇÃO NATIVA PYTHON PARA PDF) ---
+# --- REPORTLAB (PDF) ---
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -55,7 +55,7 @@ SMTP_USER = os.environ.get("SMTP_USER")
 SMTP_PASS = os.environ.get("SMTP_PASS")     
 EMAIL_CHEFE = os.environ.get("EMAIL_CHEFE", "chefe@elobrindes.com.br")
 
-# Configuração Slack
+# Slack
 slack_app = None
 handler = None
 if SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET:
@@ -75,7 +75,6 @@ class Produto(db.Model):
     estoque_minimo = db.Column(db.Integer, default=5)
     sku_produtos = db.Column(db.String(100))
     categoria_produtos = db.Column(db.String(100))
-    # --- NOVOS CAMPOS ---
     subcategoria = db.Column(db.String(100)) 
     valor_unitario = db.Column(db.Numeric(10, 2), nullable=True)
 
@@ -165,14 +164,12 @@ def api_alterar_estoque(nome_ou_sku, quantidade, usuario):
 
 def api_movimentar_amostra(nome_ou_pat, acao, cliente_destino, usuario):
     with app.app_context():
-        # Busca Amostra
         amostra = Amostra.query.filter(or_(
             Amostra.nome.ilike(f'%{nome_ou_pat}%'),
             Amostra.codigo_patrimonio.ilike(f'%{nome_ou_pat}%'),
             Amostra.sku_amostras.ilike(f'%{nome_ou_pat}%')
         )).first()
         
-        # Fallback Fuzzy
         if not amostra:
             todos = db.session.query(Amostra.nome).all()
             nomes = [a.nome for a in todos]
@@ -222,28 +219,30 @@ if GEMINI_API_KEY:
     except Exception as e:
         print(f"Erro ao configurar GENAI: {e}", flush=True)
 
-# --- GERADOR PDF REPORTLAB ---
+# --- GERADOR PDF REPORTLAB (CORRIGIDO PARA EVITAR ERRO 500) ---
 def gerar_pdf_protocolo(protocolo):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
     elements = []
     
-    # Estilos
     styles = getSampleStyleSheet()
     style_title = ParagraphStyle('Title', parent=styles['Heading1'], alignment=TA_CENTER, fontSize=24, spaceAfter=20, textColor=colors.darkred)
     style_center = ParagraphStyle('Center', parent=styles['Normal'], alignment=TA_CENTER, fontSize=10)
     style_warning = ParagraphStyle('Warning', parent=styles['Normal'], alignment=TA_CENTER, fontSize=11, textColor=colors.red, fontName='Helvetica-Bold')
     style_address = ParagraphStyle('Address', parent=styles['Normal'], alignment=TA_CENTER, fontSize=10, textColor=colors.white, backColor=colors.black, borderPadding=8)
 
-    # Cabeçalho
+    # Header
     elements.append(Paragraph("<b>ELO BRINDES</b>", style_title))
     elements.append(Paragraph(f"PROTOCOLO DE AMOSTRA <b>#{protocolo.id}</b>", styles['Heading2']))
     elements.append(Spacer(1, 0.5 * cm))
     
-    # Dados Gerais
+    # Datas e Vendedor
+    d_envio = protocolo.data_criacao.strftime('%d/%m/%Y') if protocolo.data_criacao else '--/--/----'
+    d_dev = protocolo.data_prevista_devolucao.strftime('%d/%m/%Y') if protocolo.data_prevista_devolucao else '--/--/----'
+    
     dados_topo = [
-        [f"DATA DE ENVIO: {protocolo.data_criacao.strftime('%d/%m/%Y')}", f"DEVOLUÇÃO PREVISTA: {protocolo.data_prevista_devolucao.strftime('%d/%m/%Y')}"],
-        [f"VENDEDOR: {protocolo.vendedor_email}", ""]
+        [f"DATA DE ENVIO: {d_envio}", f"DEVOLUÇÃO PREVISTA: {d_dev}"],
+        [f"VENDEDOR: {protocolo.vendedor_email or ''}", ""]
     ]
     t_topo = Table(dados_topo, colWidths=[10*cm, 9*cm])
     t_topo.setStyle(TableStyle([
@@ -258,12 +257,12 @@ def gerar_pdf_protocolo(protocolo):
     # Dados Cliente
     elements.append(Paragraph("<b>DADOS DO CLIENTE</b>", styles['Heading4']))
     dados_cliente = [
-        ["Empresa:", protocolo.cliente_empresa],
-        ["Contato:", protocolo.cliente_nome],
-        ["CNPJ:", protocolo.cliente_cnpj],
-        ["Email:", protocolo.cliente_email],
-        ["Telefone:", protocolo.cliente_telefone],
-        ["Endereço:", protocolo.cliente_endereco]
+        ["Empresa:", protocolo.cliente_empresa or ''],
+        ["Contato:", protocolo.cliente_nome or ''],
+        ["CNPJ:", protocolo.cliente_cnpj or ''],
+        ["Email:", protocolo.cliente_email or ''],
+        ["Telefone:", protocolo.cliente_telefone or ''],
+        ["Endereço:", protocolo.cliente_endereco or '']
     ]
     t_cliente = Table(dados_cliente, colWidths=[3.5*cm, 15.5*cm])
     t_cliente.setStyle(TableStyle([
@@ -274,31 +273,44 @@ def gerar_pdf_protocolo(protocolo):
     elements.append(t_cliente)
     elements.append(Spacer(1, 0.5 * cm))
 
-    # Itens - COM PREÇOS
+    # Itens - TRATAMENTO ROBUSTO DE NULOS
     elements.append(Paragraph("<b>ITENS SOLICITADOS</b>", styles['Heading4']))
     
     data_itens = [['SKU', 'PRODUTO / DESCRIÇÃO', 'QTD', 'UNIT.', 'TOTAL']]
-    
     total_protocolo = 0.0
     
     if protocolo.itens_json:
         for item in protocolo.itens_json:
-            val_unit = float(item.get('preco_unit', 0))
-            val_total = float(item.get('subtotal', 0))
-            total_protocolo += val_total
+            try:
+                # Garante que valores nulos no JSON virem 0 ou string vazia
+                sku_txt = str(item.get('sku') or '-')
+                nome_txt = str(item.get('nome') or 'Item sem nome')
+                qtd_txt = str(item.get('qtd') or '1')
+                
+                # Conversão segura de valores numéricos
+                raw_unit = item.get('preco_unit')
+                raw_total = item.get('subtotal')
+                
+                val_unit = float(raw_unit) if raw_unit is not None else 0.0
+                val_total = float(raw_total) if raw_total is not None else 0.0
+                
+                total_protocolo += val_total
+                
+                data_itens.append([
+                    sku_txt,
+                    nome_txt,
+                    qtd_txt,
+                    f"R$ {val_unit:.2f}",
+                    f"R$ {val_total:.2f}"
+                ])
+            except Exception as e:
+                # Se algo der muito errado em uma linha, loga e pula a linha ou insere erro
+                print(f"Erro processando item PDF: {e}")
+                data_itens.append(["ERR", "Erro nos dados do item", "0", "0.00", "0.00"])
             
-            data_itens.append([
-                item.get('sku', '-'),
-                item.get('nome', 'Item sem nome'),
-                str(item.get('qtd', 1)),
-                f"R$ {val_unit:.2f}",
-                f"R$ {val_total:.2f}"
-            ])
-            
-    # Adiciona linha de total geral
+    # Total Geral
     data_itens.append(['', '', '', 'TOTAL:', f"R$ {total_protocolo:.2f}"])
     
-    # Ajuste de larguras para 5 colunas
     t_itens = Table(data_itens, colWidths=[3*cm, 8.5*cm, 2*cm, 2.5*cm, 2.5*cm])
     t_itens.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.darkred),
@@ -403,7 +415,6 @@ def dashboard():
     produtos_showroom = [] 
     amostras = []
     
-    # 1. Carrega opções de Categorias e Subcategorias
     cats_prod_raw = db.session.query(Produto.categoria_produtos).distinct().all()
     cats_amos_raw = db.session.query(Amostra.categoria_amostra).distinct().all()
     subs_raw = db.session.query(Produto.subcategoria).distinct().all() 
@@ -421,7 +432,7 @@ def dashboard():
     ver_compras = role == 'COMPRAS' or ver_tudo
     ver_vendas = role == 'VENDAS' or ver_tudo
     
-    # --- ALMOXARIFADO (Exceto Showroom) ---
+    # 1. ALMOXARIFADO (Tudo que NÃO é Showroom)
     if ver_compras:
         query = Produto.query
         query = query.filter(or_(
@@ -437,9 +448,9 @@ def dashboard():
             
         produtos = query.order_by(Produto.nome).all()
         
-    # --- SHOWROOM (Produtos Showroom + Amostras) ---
+    # 2. SHOWROOM (Produtos Showroom + Amostras Únicas)
     if ver_vendas:
-        # Produtos Showroom
+        # 2a. Produtos do Showroom (Tem Quantidade)
         query_sp = Produto.query.filter(Produto.categoria_produtos.ilike('%showroom%'))
         if search_query: 
             query_sp = query_sp.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
@@ -450,7 +461,7 @@ def dashboard():
              
         produtos_showroom = query_sp.order_by(Produto.nome).all()
 
-        # Amostras Únicas
+        # 2b. Amostras Únicas (Patrimônio)
         query = Amostra.query
         if search_query: query = query.filter(or_(Amostra.nome.ilike(f'%{search_query}%'), Amostra.sku_amostras.ilike(f'%{search_query}%')))
         if filter_cat: query = query.filter(Amostra.categoria_amostra == filter_cat)
@@ -481,8 +492,8 @@ def novo_protocolo():
     if request.method == 'POST':
         acao = request.form.get('acao')
 
+        # --- PREVIEW DO PROTOCOLO ---
         if acao == 'revisar':
-            # Dados para Preview
             dados_cliente = {
                 'nome': request.form.get('cliente_nome'),
                 'empresa': request.form.get('cliente_empresa'),
@@ -503,10 +514,18 @@ def novo_protocolo():
             for i in range(len(skus)):
                 if nomes[i].strip():
                     qtd_val = int(qtds[i])
-                    # Busca preço produto ou amostra? (Preferência Produto tabela)
-                    prod = Produto.query.filter_by(sku_produtos=skus[i]).first()
-                    if not prod: prod = Produto.query.filter_by(nome=nomes[i]).first()
                     
+                    # 1. Tenta achar em Produto Showroom para pegar preço
+                    prod = Produto.query.filter(
+                        or_(Produto.sku_produtos == skus[i], Produto.nome == nomes[i]),
+                        Produto.categoria_produtos.ilike('%showroom%')
+                    ).first()
+
+                    # 2. Se não, tenta Amostra (mas amostra geralmente nao tem preço unitario cadastrado, assume 0)
+                    if not prod:
+                        # Aqui poderia buscar preço de outro lugar se necessário
+                        pass 
+
                     preco = float(prod.valor_unitario) if (prod and prod.valor_unitario) else 0.0
                     subtotal = preco * qtd_val
                     total_geral += subtotal
@@ -527,6 +546,7 @@ def novo_protocolo():
                                    total_geral=total_geral,
                                    produtos_db=[]) 
 
+        # --- GRAVAR PROTOCOLO ---
         elif acao == 'confirmar':
             try:
                 data_prevista = datetime.strptime(request.form.get('data_prevista'), '%Y-%m-%d')
@@ -538,8 +558,12 @@ def novo_protocolo():
                 for i in range(len(skus)):
                     if nomes[i].strip():
                         qtd_val = int(qtds[i])
-                        prod = Produto.query.filter_by(sku_produtos=skus[i]).first()
-                        if not prod: prod = Produto.query.filter_by(nome=nomes[i]).first()
+                        
+                        # Busca para pegar o preço e salvar no JSON
+                        prod = Produto.query.filter(
+                            or_(Produto.sku_produtos == skus[i], Produto.nome == nomes[i]),
+                            Produto.categoria_produtos.ilike('%showroom%')
+                        ).first()
                         
                         preco_unit = float(prod.valor_unitario) if (prod and prod.valor_unitario) else 0.0
                         subtotal = preco_unit * qtd_val
@@ -547,7 +571,7 @@ def novo_protocolo():
                         itens_json.append({
                             "sku": skus[i], 
                             "nome": nomes[i], 
-                            "qtd": qtds[i], 
+                            "qtd": qtd_val,
                             "preco_unit": preco_unit,
                             "subtotal": subtotal
                         })
@@ -566,13 +590,14 @@ def novo_protocolo():
                 
                 db.session.add(novo)
                 
-                # --- PROCESSAR SAÍDA ---
+                # --- PROCESSAR BAIXA/STATUS (CRÍTICO) ---
                 for item in itens_json:
                     sku = item.get('sku')
                     nome = item.get('nome')
                     qtd_saida = int(item.get('qtd', 1))
 
-                    # 1. Tenta Amostra Única (Muda Status)
+                    # LÓGICA UNIFICADA:
+                    # 1. Tenta achar Amostra Única (Patrimônio)
                     amostra_db = None
                     if sku: amostra_db = Amostra.query.filter_by(sku_amostras=sku).first()
                     if not amostra_db and nome: amostra_db = Amostra.query.filter(Amostra.nome.ilike(nome)).first()
@@ -585,13 +610,15 @@ def novo_protocolo():
                         amostra_db.data_prevista_retorno = data_prevista
                         db.session.add(Log(tipo_item='amostra', item_id=amostra_db.id, acao='PROTOCOLO_SAIDA', usuario_nome=session['user_email']))
                     
-                    # 2. Se não achou amostra única, verifica se é Produto Showroom para baixar estoque
+                    # 2. Se não for Amostra Única, DEVE ser Produto Showroom (Baixa Estoque)
                     elif not amostra_db:
-                        prod_db = None
-                        if sku: prod_db = Produto.query.filter_by(sku_produtos=sku).first()
-                        if not prod_db and nome: prod_db = Produto.query.filter_by(nome=nome).first()
+                        # Busca forçada na categoria Showroom
+                        prod_db = Produto.query.filter(
+                            or_(Produto.sku_produtos == sku, Produto.nome == nome),
+                            Produto.categoria_produtos.ilike('%showroom%')
+                        ).first()
                         
-                        if prod_db and 'showroom' in (prod_db.categoria_produtos or '').lower():
+                        if prod_db:
                             prod_db.quantidade -= qtd_saida
                             db.session.add(Log(
                                 tipo_item='produto_showroom', 
@@ -600,30 +627,36 @@ def novo_protocolo():
                                 quantidade=qtd_saida,
                                 usuario_nome=session['user_email']
                             ))
+                        else:
+                            print(f"⚠️ AVISO: Item '{nome}' não encontrado nem como Amostra nem como Showroom.")
 
                 db.session.commit()
                 
+                # Gera e Envia
                 pdf_bytes = gerar_pdf_protocolo(novo)
                 enviar_email_protocolo(novo, pdf_bytes)
                 
                 return redirect('/elostock/protocolos')
                 
             except Exception as e:
-                print(f"Erro ao criar protocolo: {e}")
-                return f"Erro: {e}"
+                db.session.rollback()
+                print(f"Erro ao criar protocolo: {traceback.format_exc()}")
+                return f"Erro Crítico ao Gerar Protocolo: {e}"
 
-    # AUTOCOMPLETE
-    todos_produtos = Produto.query.with_entities(Produto.sku_produtos, Produto.nome).all()
+    # AUTOCOMPLETE (Carrega TUDO: Produtos Showroom + Amostras)
+    todos_produtos = Produto.query.filter(Produto.categoria_produtos.ilike('%showroom%')).with_entities(Produto.sku_produtos, Produto.nome).all()
     todas_amostras = Amostra.query.with_entities(Amostra.sku_amostras, Amostra.nome).all()
     
     lista_final = []
     seen = set()
     
+    # Adiciona produtos showroom
     for p in todos_produtos:
         if p.nome not in seen:
             lista_final.append({"sku": (p.sku_produtos or ""), "nome": p.nome})
             seen.add(p.nome)
-            
+    
+    # Adiciona amostras
     for a in todas_amostras:
         if a.nome not in seen:
             lista_final.append({"sku": (a.sku_amostras or ""), "nome": a.nome})
@@ -635,15 +668,18 @@ def novo_protocolo():
 def download_protocolo(id):
     if 'user_email' not in session: return redirect('/elostock/')
     
-    protocolo = Protocolo.query.get_or_404(id)
-    pdf_bytes = gerar_pdf_protocolo(protocolo)
-    
-    response = make_response(pdf_bytes)
-    response.headers['Content-Type'] = 'application/pdf'
-    response.headers['Content-Disposition'] = f'attachment; filename=Protocolo_{protocolo.id}.pdf'
-    return response
+    try:
+        protocolo = Protocolo.query.get_or_404(id)
+        pdf_bytes = gerar_pdf_protocolo(protocolo)
+        
+        response = make_response(pdf_bytes)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename=Protocolo_{protocolo.id}.pdf'
+        return response
+    except Exception as e:
+        print(f"Erro no Download PDF: {traceback.format_exc()}")
+        return f"Erro interno ao gerar PDF: {str(e)}", 500
 
-# --- API CHAT ---
 @app.route('/elostock/api/chat', methods=['POST'])
 def api_chat():
     if 'user_email' not in session: return jsonify({"response": "Você precisa estar logado."}), 401
@@ -701,45 +737,50 @@ def acao(tipo, id):
     if tipo == 'produto':
         item = Produto.query.get_or_404(id)
         
-        # --- VERIFICAÇÃO SE É SHOWROOM ---
-        # Se for Showroom, não usamos a view padrão de 'produto' (que é só retirar qtd).
-        # Usaremos a view de 'amostra' (para ter os botões de Protocolo, Vendido, etc).
+        # --- LÓGICA UNIFICADA: SE FOR SHOWROOM, VIRA "AMOSTRA" NA VISUALIZAÇÃO ---
         is_showroom = 'showroom' in (item.categoria_produtos or '').lower()
 
         if is_showroom:
-            # Truque: Alteramos visualmente para 'amostra' para ativar o bloco 'else' no HTML
+            # Truque para usar o template de Gestão (Protocolo/Venda/Baixa)
             tipo_visualizacao = 'amostra' 
-            # Mapeamos os campos para o HTML não quebrar
+            # Mapeia campos para não quebrar o HTML
             item.sku_amostras = item.sku_produtos
             item.categoria_amostra = item.categoria_produtos
-            item.status = 'DISPONIVEL' # Força status disponível para aparecerem os botões
+            item.status = 'DISPONIVEL' # Para liberar os botões
             item.vendedor_responsavel = None
             item.codigo_patrimonio = None
 
             if request.method == 'POST':
                 acao_realizada = request.form.get('acao_amostra')
                 
-                # Para produtos showroom, 'Vendido' ou 'Fora de Linha' zera o estoque
-                if acao_realizada == 'fora_linha' or acao_realizada == 'vendido':
-                    qtd_anterior = item.quantidade
-                    item.quantidade = 0
-                    acao_log = 'WEB_BAIXA_VENDIDO' if acao_realizada == 'vendido' else 'WEB_BAIXA_FORA_LINHA'
-                    
-                    db.session.add(Log(
-                        tipo_item='produto_showroom', 
-                        item_id=item.id, 
-                        acao=acao_log, 
-                        quantidade=qtd_anterior, 
-                        usuario_nome=session['user_email']
-                    ))
-                    db.session.commit()
-                    msg_sucesso = "Item de Showroom baixado (Estoque zerado)."
+                # Showroom: Venda ou Baixa zera o estoque (ou decrementa, mas aqui zera o item específico visualizado se fosse único,
+                # MAS como é produto com quantidade, vamos assumir que essa tela de gestão específica baixa TUDO ou trata unitário?
+                # No seu pedido anterior, era para comportar como amostra.
+                # Se clicar em "Vendido" na tela de um produto com 10 unidades, vamos vender 1 unidade ou tudo?
+                # Pela lógica de "Protocolo" (que pede qtd), aqui vamos baixar 1 unidade por padrão se for ação rápida, 
+                # mas o form de "Amostra" não tem campo Qtd. 
+                # -> Solução Segura: Baixar 1 unidade.
+                
+                if acao_realizada in ['vendido', 'fora_linha']:
+                    if item.quantidade > 0:
+                        item.quantidade -= 1
+                        acao_log = 'WEB_BAIXA_VENDIDO' if acao_realizada == 'vendido' else 'WEB_BAIXA_FORA_LINHA'
+                        db.session.add(Log(
+                            tipo_item='produto_showroom', 
+                            item_id=item.id, 
+                            acao=acao_log, 
+                            quantidade=1, 
+                            usuario_nome=session['user_email']
+                        ))
+                        db.session.commit()
+                        msg_sucesso = "1 Unidade baixada do estoque de Showroom."
+                    else:
+                        msg_sucesso = "Erro: Sem estoque para baixar."
 
-            # Renderiza como se fosse amostra para exibir as opções corretas
             return render_template('index.html', view_mode='acao', item=item, tipo='amostra', msg=msg_sucesso)
 
         else:
-            # --- LÓGICA PADRÃO ALMOXARIFADO ---
+            # --- ALMOXARIFADO PADRÃO (Retirada Simples) ---
             if role == 'VENDAS': return "⛔ Acesso Negado"
             if request.method == 'POST':
                 qtd = int(request.form.get('qtd', 1))
