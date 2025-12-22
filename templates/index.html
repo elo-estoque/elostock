@@ -41,6 +41,7 @@
             border-bottom: 1px solid var(--border-color);
         }
 
+        /* Form Elements & Inputs */
         .form-control, .form-select {
             background-color: var(--input-bg);
             border: 1px solid var(--border-color);
@@ -53,12 +54,17 @@
             box-shadow: 0 0 0 0.25rem rgba(227, 25, 55, 0.25);
         }
         .form-control::placeholder { color: #6c757d; }
+        
+        /* Tenta forçar opções escuras no dropdown */
+        option { background-color: var(--brand-card); color: white; }
+
         .input-group-text {
             background-color: var(--input-bg);
             border-color: var(--border-color);
             color: var(--text-muted);
         }
 
+        /* Buttons */
         .btn-primary {
             background-color: var(--brand-wine);
             border-color: var(--brand-wine);
@@ -73,6 +79,7 @@
         .btn-outline-dark { color: var(--text-main); border-color: var(--border-color); }
         .btn-outline-dark:hover { background-color: white; color: black; }
         
+        /* Card Items */
         .card-item { 
             transition: all 0.2s; 
             border-bottom: 1px solid var(--border-color) !important; 
@@ -80,8 +87,28 @@
         }
         .card-item:hover { background-color: rgba(255,255,255,0.03); }
         
-        .badge-cat { font-size: 0.75rem; background-color: rgba(255,255,255,0.1); color: var(--text-main); border-radius: 4px; padding: 2px 6px; }
+        /* Badges */
+        .badge-cat { 
+            font-size: 0.75rem; 
+            background-color: rgba(255,255,255,0.15); 
+            color: white; 
+            border-radius: 4px; 
+            padding: 2px 6px; 
+            white-space: nowrap;
+        }
+        
+        .badge-sub {
+            font-size: 0.75rem;
+            background-color: transparent;
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #aaa;
+            border-radius: 4px;
+            padding: 1px 6px;
+            white-space: nowrap;
+        }
+
         .badge-sku { font-size: 0.7rem; color: var(--text-muted); font-family: monospace; }
+        
         .text-muted { color: var(--text-muted) !important; }
         .text-secondary { color: #adb5bd !important; }
         .bg-light { background-color: rgba(255,255,255,0.05) !important; border-bottom: 1px solid var(--border-color); }
@@ -103,6 +130,8 @@
         .msg-user { background: #333; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
         .msg-ai { background: rgba(227, 25, 55, 0.15); color: #ffb3b3; border: 1px solid rgba(227, 25, 55, 0.3); align-self: flex-start; border-bottom-left-radius: 2px; }
         .typing { font-size: 0.8rem; color: #777; font-style: italic; display: none; margin-left: 10px; }
+        
+        /* Scrollbar */
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: var(--brand-dark); }
         ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
@@ -181,10 +210,10 @@
                         <div class="card-item py-3 d-flex justify-content-between align-items-center {{ 'rounded px-2' if critico else '' }}" style="{{ 'background-color: rgba(220, 53, 69, 0.15); border-bottom: none !important;' if critico else '' }}">
                             <div style="max-width: 70%;">
                                 <div class="fw-bold">{{ p.nome }}</div>
-                                <div class="d-flex gap-2 mt-1">
+                                <div class="d-flex gap-2 mt-2 flex-wrap align-items-center">
                                     {% if p.sku_produtos %}<span class="badge-sku"><i class="bi bi-upc-scan"></i> {{ p.sku_produtos }}</span>{% endif %}
                                     {% if p.categoria_produtos %}<span class="badge-cat">{{ p.categoria_produtos }}</span>{% endif %}
-                                    {% if p.subcategoria %}<span class="badge-cat" style="background-color: rgba(255,255,255,0.05); color: #aaa;">{{ p.subcategoria }}</span>{% endif %}
+                                    {% if p.subcategoria %}<span class="badge-sub">{{ p.subcategoria }}</span>{% endif %}
                                 </div>
                                 <small class="text-muted d-block mt-1">{{ p.localizacao }}</small>
                             </div>
@@ -216,10 +245,10 @@
                             <div class="card-item py-3 d-flex justify-content-between align-items-center">
                                 <div style="max-width: 70%;">
                                     <div class="fw-bold">{{ p.nome }}</div>
-                                    <div class="d-flex gap-2 mt-1">
+                                    <div class="d-flex gap-2 mt-2 flex-wrap align-items-center">
                                         {% if p.sku_produtos %}<span class="badge-sku"><i class="bi bi-upc-scan"></i> {{ p.sku_produtos }}</span>{% endif %}
                                         <span class="badge-cat bg-danger bg-opacity-25 text-danger border border-danger border-opacity-25">Showroom</span>
-                                        {% if p.subcategoria %}<span class="badge-cat" style="background-color: rgba(255,255,255,0.05); color: #aaa;">{{ p.subcategoria }}</span>{% endif %}
+                                        {% if p.subcategoria %}<span class="badge-sub">{{ p.subcategoria }}</span>{% endif %}
                                     </div>
                                     <small class="text-muted d-block mt-1">{{ p.localizacao }}</small>
                                 </div>
@@ -239,7 +268,7 @@
                                 <div class="d-flex justify-content-between align-items-start mb-2">
                                     <div style="max-width: 75%;">
                                         <h6 class="mb-0 fw-bold">{{ a.nome }}</h6>
-                                        <div class="d-flex gap-2 mt-1 mb-1">
+                                        <div class="d-flex gap-2 mt-2 mb-1 flex-wrap">
                                             {% if a.sku_amostras %}<span class="badge-sku"><i class="bi bi-upc-scan"></i> {{ a.sku_amostras }}</span>{% endif %}
                                             {% if a.categoria_amostra %}<span class="badge-cat">{{ a.categoria_amostra }}</span>{% endif %}
                                         </div>
