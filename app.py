@@ -423,8 +423,21 @@ def dashboard():
     
     if ver_compras:
         query = Produto.query
-        if search_query: query = query.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
-        if filter_cat: query = query.filter(Produto.categoria_produtos == filter_cat)
+        
+        # --- FIX: REMOVER ITENS CATEGORIA SHOWROOM DO ALMOXARIFADO ---
+        # Garante que produtos cadastrados no DB Produto com cat=Showroom não poluam a lista de compras
+        query = query.filter(or_(
+            Produto.categoria_produtos == None,
+            ~Produto.categoria_produtos.ilike('%showroom%')
+        ))
+        # -------------------------------------------------------------
+
+        if search_query: 
+            query = query.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
+        
+        if filter_cat: 
+            query = query.filter(Produto.categoria_produtos == filter_cat)
+            
         produtos = query.order_by(Produto.nome).all()
         
     if ver_vendas:
