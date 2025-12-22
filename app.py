@@ -30,7 +30,7 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.units import cm
-from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+from reportlab.lib.enums import TA_CENTER
 
 # --- CONFIGURAÇÃO ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -75,8 +75,6 @@ class Produto(db.Model):
     estoque_minimo = db.Column(db.Integer, default=5)
     sku_produtos = db.Column(db.String(100))
     categoria_produtos = db.Column(db.String(100))
-    # --- NOVO CAMPO ADICIONADO (Senior Dev Request) ---
-    valor_unitario = db.Column(db.Numeric(10, 2), nullable=True)
 
 class Amostra(db.Model):
     __tablename__ = 'amostras'
@@ -275,46 +273,27 @@ def gerar_pdf_protocolo(protocolo):
     elements.append(t_cliente)
     elements.append(Spacer(1, 0.5 * cm))
 
-    # Itens - AGORA COM VALORES MONETÁRIOS
+    # Itens
     elements.append(Paragraph("<b>ITENS SOLICITADOS</b>", styles['Heading4']))
-    
-    # Cabeçalho atualizado para incluir valores
-    data_itens = [['SKU', 'PRODUTO / DESCRIÇÃO', 'QTD', 'UNIT.', 'TOTAL']]
-    
-    total_protocolo = 0.0
+    data_itens = [['SKU', 'PRODUTO / DESCRIÇÃO', 'QTD']]
     
     if protocolo.itens_json:
         for item in protocolo.itens_json:
-            # Recupera valores ou usa 0.0 se não existirem
-            val_unit = float(item.get('preco_unit', 0))
-            val_total = float(item.get('subtotal', 0))
-            total_protocolo += val_total
-            
             data_itens.append([
                 item.get('sku', '-'),
                 item.get('nome', 'Item sem nome'),
-                str(item.get('qtd', 1)),
-                f"R$ {val_unit:.2f}",
-                f"R$ {val_total:.2f}"
+                str(item.get('qtd', 1))
             ])
-            
-    # Adiciona linha de total geral
-    data_itens.append(['', '', '', 'TOTAL:', f"R$ {total_protocolo:.2f}"])
     
-    # Ajuste de larguras para 5 colunas
-    # Total ~18.5cm
-    t_itens = Table(data_itens, colWidths=[3*cm, 8.5*cm, 2*cm, 2.5*cm, 2.5*cm])
+    t_itens = Table(data_itens, colWidths=[4*cm, 12*cm, 3*cm])
     t_itens.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.darkred),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('ALIGN', (1, 0), (1, -1), 'LEFT'), # Produto alinhado a esquerda
-        ('ALIGN', (3, 1), (-1, -1), 'RIGHT'), # Valores alinhados a direita
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), # Header negrito
-        ('FONTNAME', (-2, -1), (-1, -1), 'Helvetica-Bold'), # Linha Total negrito
+        ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-        ('GRID', (0, 0), (-1, -2), 1, colors.black), # Grid normal
-        ('LINEBELOW', (0, -1), (-1, -1), 1, colors.black), # Linha final
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
     ]))
     elements.append(t_itens)
     
@@ -452,135 +431,67 @@ def novo_protocolo():
     if 'user_email' not in session: return redirect('/elostock/')
     
     if request.method == 'POST':
-        # --- LÓGICA DE REVISÃO E CONFIRMAÇÃO ---
-        acao = request.form.get('acao')
-
-        if acao == 'revisar':
-            # Captura dados brutos para o preview
-            dados_cliente = {
-                'nome': request.form.get('cliente_nome'),
-                'empresa': request.form.get('cliente_empresa'),
-                'cnpj': request.form.get('cliente_cnpj'),
-                'email': request.form.get('cliente_email'),
-                'telefone': request.form.get('cliente_telefone'),
-                'endereco': request.form.get('cliente_endereco'),
-                'data_prevista': request.form.get('data_prevista')
-            }
-            
+        try:
+            data_prevista = datetime.strptime(request.form.get('data_prevista'), '%Y-%m-%d')
             skus = request.form.getlist('item_sku[]')
             nomes = request.form.getlist('item_nome[]')
             qtds = request.form.getlist('item_qtd[]')
             
-            itens_preview = []
-            total_geral = 0.0
-            
+            itens_json = []
             for i in range(len(skus)):
                 if nomes[i].strip():
-                    qtd_val = int(qtds[i])
-                    # Tenta buscar preço no banco
-                    prod = Produto.query.filter_by(sku_produtos=skus[i]).first()
-                    if not prod:
-                        prod = Produto.query.filter_by(nome=nomes[i]).first()
-                    
-                    preco = float(prod.valor_unitario) if (prod and prod.valor_unitario) else 0.0
-                    subtotal = preco * qtd_val
-                    total_geral += subtotal
-                    
-                    itens_preview.append({
-                        "sku": skus[i], 
-                        "nome": nomes[i], 
-                        "qtd": qtd_val,
-                        "preco_unit": preco,
-                        "subtotal": subtotal
-                    })
+                    itens_json.append({"sku": skus[i], "nome": nomes[i], "qtd": qtds[i]})
+            
+            novo = Protocolo(
+                vendedor_email=session['user_email'],
+                cliente_nome=request.form.get('cliente_nome'),
+                cliente_empresa=request.form.get('cliente_empresa'),
+                cliente_cnpj=request.form.get('cliente_cnpj'),
+                cliente_email=request.form.get('cliente_email'),
+                cliente_telefone=request.form.get('cliente_telefone'),
+                cliente_endereco=request.form.get('cliente_endereco'),
+                data_prevista_devolucao=data_prevista,
+                itens_json=itens_json
+            )
+            
+            db.session.add(novo)
+            
+            # --- ATUALIZAÇÃO AUTOMÁTICA DE STATUS PARA 'EM_RUA' ---
+            # Para cada item do protocolo, tenta achar a amostra e atualizar
+            for item in itens_json:
+                sku = item.get('sku')
+                nome = item.get('nome')
+                
+                amostra_db = None
+                if sku:
+                    amostra_db = Amostra.query.filter_by(sku_amostras=sku).first()
+                
+                if not amostra_db and nome:
+                    amostra_db = Amostra.query.filter(Amostra.nome.ilike(nome)).first()
+                
+                if amostra_db and amostra_db.status == 'DISPONIVEL':
+                    amostra_db.status = 'EM_RUA'
+                    amostra_db.vendedor_responsavel = session['user_email']
+                    amostra_db.cliente_destino = novo.cliente_empresa
+                    amostra_db.data_saida = datetime.now()
+                    amostra_db.data_prevista_retorno = data_prevista
+                    db.session.add(Log(
+                        tipo_item='amostra', 
+                        item_id=amostra_db.id, 
+                        acao='PROTOCOLO_SAIDA', 
+                        usuario_nome=session['user_email']
+                    ))
 
-            # Renderiza preview
-            return render_template('index.html', view_mode='novo_protocolo', 
-                                   user=session['user_email'], 
-                                   preview_mode=True,
-                                   dados_cliente=dados_cliente,
-                                   itens_preview=itens_preview,
-                                   total_geral=total_geral,
-                                   produtos_db=[]) 
-
-        elif acao == 'confirmar':
-            # --- CÓDIGO ORIGINAL ENCAPSULADO (NENHUMA LINHA ALTERADA, APENAS INDENTADA E APRIMORADA PARA SALVAR PREÇO) ---
-            try:
-                data_prevista = datetime.strptime(request.form.get('data_prevista'), '%Y-%m-%d')
-                skus = request.form.getlist('item_sku[]')
-                nomes = request.form.getlist('item_nome[]')
-                qtds = request.form.getlist('item_qtd[]')
-                
-                itens_json = []
-                for i in range(len(skus)):
-                    if nomes[i].strip():
-                        # --- MODIFICAÇÃO PARA CAPTURAR O PREÇO AO SALVAR ---
-                        qtd_val = int(qtds[i])
-                        prod = Produto.query.filter_by(sku_produtos=skus[i]).first()
-                        if not prod: prod = Produto.query.filter_by(nome=nomes[i]).first()
-                        
-                        preco_unit = float(prod.valor_unitario) if (prod and prod.valor_unitario) else 0.0
-                        subtotal = preco_unit * qtd_val
-                        
-                        itens_json.append({
-                            "sku": skus[i], 
-                            "nome": nomes[i], 
-                            "qtd": qtds[i], 
-                            "preco_unit": preco_unit, # Salva valor unitário
-                            "subtotal": subtotal      # Salva subtotal
-                        })
-                
-                novo = Protocolo(
-                    vendedor_email=session['user_email'],
-                    cliente_nome=request.form.get('cliente_nome'),
-                    cliente_empresa=request.form.get('cliente_empresa'),
-                    cliente_cnpj=request.form.get('cliente_cnpj'),
-                    cliente_email=request.form.get('cliente_email'),
-                    cliente_telefone=request.form.get('cliente_telefone'),
-                    cliente_endereco=request.form.get('cliente_endereco'),
-                    data_prevista_devolucao=data_prevista,
-                    itens_json=itens_json
-                )
-                
-                db.session.add(novo)
-                
-                # --- ATUALIZAÇÃO AUTOMÁTICA DE STATUS PARA 'EM_RUA' ---
-                # Para cada item do protocolo, tenta achar a amostra e atualizar
-                for item in itens_json:
-                    sku = item.get('sku')
-                    nome = item.get('nome')
-                    
-                    amostra_db = None
-                    if sku:
-                        amostra_db = Amostra.query.filter_by(sku_amostras=sku).first()
-                    
-                    if not amostra_db and nome:
-                        amostra_db = Amostra.query.filter(Amostra.nome.ilike(nome)).first()
-                    
-                    if amostra_db and amostra_db.status == 'DISPONIVEL':
-                        amostra_db.status = 'EM_RUA'
-                        amostra_db.vendedor_responsavel = session['user_email']
-                        amostra_db.cliente_destino = novo.cliente_empresa
-                        amostra_db.data_saida = datetime.now()
-                        amostra_db.data_prevista_retorno = data_prevista
-                        db.session.add(Log(
-                            tipo_item='amostra', 
-                            item_id=amostra_db.id, 
-                            acao='PROTOCOLO_SAIDA', 
-                            usuario_nome=session['user_email']
-                        ))
-
-                db.session.commit()
-                
-                pdf_bytes = gerar_pdf_protocolo(novo)
-                enviar_email_protocolo(novo, pdf_bytes)
-                
-                return redirect('/elostock/protocolos')
-                
-            except Exception as e:
-                print(f"Erro ao criar protocolo: {e}")
-                return f"Erro: {e}"
-            # --- FIM DO BLOCO ENCAPSULADO ---
+            db.session.commit()
+            
+            pdf_bytes = gerar_pdf_protocolo(novo)
+            enviar_email_protocolo(novo, pdf_bytes)
+            
+            return redirect('/elostock/protocolos')
+            
+        except Exception as e:
+            print(f"Erro ao criar protocolo: {e}")
+            return f"Erro: {e}"
 
     # AUTOCOMPLETE
     todos_produtos = Produto.query.with_entities(Produto.sku_produtos, Produto.nome).all()
