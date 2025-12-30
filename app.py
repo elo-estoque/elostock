@@ -623,7 +623,7 @@ def novo_protocolo():
                             db.session.add(Log(
                                 tipo_item='produto_showroom', 
                                 item_id=prod_db.id, 
-                                acao='PROTOCOLO_SAIDA_ESTOQUE', 
+                                acao='SAIDA_PROTOCOLO', 
                                 quantidade=qtd_saida,
                                 usuario_nome=session['user_email']
                             ))
