@@ -46,9 +46,10 @@ SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
 
 # --- CONFIGURAÇÃO AUTENTIQUE ---
 AUTENTIQUE_TOKEN = os.environ.get("AUTENTIQUE_TOKEN")
+# Usar URL correta da API V2
 AUTENTIQUE_URL = "https://api.autentique.com.br/v2/graphql"
 
-# Configuração de E-mail (SMTP) - Mantido para notificações internas se necessário
+# Configuração de E-mail (SMTP)
 SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = os.environ.get("SMTP_PORT", 587)
 SMTP_USER = os.environ.get("SMTP_USER")     
@@ -119,7 +120,7 @@ class Protocolo(db.Model):
     data_criacao = db.Column(db.DateTime, default=datetime.now)
     data_prevista_devolucao = db.Column(db.DateTime)
 
-# --- FUNÇÕES AUXILIARES (PDF & EMAIL & AUTENTIQUE) ---
+# --- FUNÇÕES AUXILIARES ---
 
 def gerar_pdf_protocolo(protocolo):
     buffer = io.BytesIO()
@@ -250,6 +251,7 @@ def enviar_para_autentique(protocolo, pdf_bytes):
         print("⚠️ Token Autentique não configurado.")
         return {"erro": "Token Autentique não encontrado no .env"}
 
+    # --- CORREÇÃO AQUI: Removido 'signed' e 'uploaded_at' que causavam erro ---
     operations = {
         "query": """
         mutation CreateDocumentMutation(
@@ -264,8 +266,6 @@ def enviar_para_autentique(protocolo, pdf_bytes):
             ) {
                 id
                 name
-                signed
-                uploaded_at
             }
         }
         """,
@@ -532,7 +532,6 @@ def novo_protocolo():
 
                 db.session.commit()
                 
-                # MUDANÇA: Redireciona para conferência em vez de finalizar direto
                 return redirect(f'/showroom/protocolo/detalhe/{novo.id}')
                 
             except Exception as e:
@@ -578,7 +577,7 @@ def detalhe_protocolo(id):
                 msg = "✅ Documento enviado para o cliente via Autentique com sucesso!"
                 protocolo.status = 'AGUARDANDO_ASSINATURA'
                 db.session.commit()
-                # Opcional: Enviar cópia interna por email também
+                # Enviar cópia interna
                 enviar_email_interno(protocolo, pdf_bytes)
             else:
                 erro = f"❌ Erro Autentique: {resultado.get('erro')}"
