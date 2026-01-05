@@ -658,6 +658,41 @@ def acao(tipo, id):
 
     return render_template('index.html', view_mode='acao', item=item, tipo=tipo, msg=msg_sucesso)
 
+# --- NOVA ROTA: ALTERAR SENHA (INTEGRADA AO DIRECTUS) ---
+@app.route('/showroom/perfil/senha', methods=['GET', 'POST'])
+def alterar_senha():
+    if 'user_email' not in session: return redirect('/showroom/')
+    msg = None
+    erro = None
+
+    if request.method == 'POST':
+        nova_senha = request.form.get('nova_senha')
+        confirma_senha = request.form.get('confirma_senha')
+
+        if nova_senha != confirma_senha:
+            erro = "As senhas não coincidem."
+        elif not nova_senha or len(nova_senha) < 4:
+            erro = "A senha deve ter pelo menos 4 caracteres."
+        else:
+            try:
+                # Chama a API do Directus para atualizar o usuário atual (/users/me)
+                headers = {
+                    "Authorization": f"Bearer {session.get('user_token')}",
+                    "Content-Type": "application/json"
+                }
+                payload = {"password": nova_senha}
+                
+                resp = requests.patch(f"{DIRECTUS_URL}/users/me", json=payload, headers=headers)
+
+                if resp.status_code == 200:
+                    msg = "Senha alterada com sucesso!"
+                else:
+                    erro = f"Erro ao alterar senha no sistema: {resp.text}"
+            except Exception as e:
+                erro = f"Erro de conexão: {str(e)}"
+
+    return render_template('index.html', view_mode='alterar_senha', msg=msg, erro=erro, user=session['user_email'])
+
 @app.route('/showroom/logout')
 def logout():
     session.clear()
