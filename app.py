@@ -6,7 +6,6 @@ warnings.simplefilter(action='ignore', category=UserWarning)
 import os
 import logging
 import traceback 
-import difflib 
 from datetime import datetime, timedelta
 import requests
 import urllib3
@@ -21,8 +20,6 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import or_, and_
 from slack_bolt import App as BoltApp
 from slack_bolt.adapter.flask import SlackRequestHandler
-import google.generativeai as genai
-from google.generativeai.types import FunctionDeclaration, Tool
 
 # --- REPORTLAB (PDF) ---
 from reportlab.lib.pagesizes import A4
@@ -44,7 +41,6 @@ db = SQLAlchemy(app)
 
 # Variáveis
 DIRECTUS_URL = os.environ.get("DIRECTUS_URL")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
 
@@ -119,107 +115,7 @@ class Protocolo(db.Model):
     data_criacao = db.Column(db.DateTime, default=datetime.now)
     data_prevista_devolucao = db.Column(db.DateTime)
 
-# --- BUSCA INTELIGENTE ---
-def encontrar_produto_inteligente(termo_busca):
-    termo_limpo = termo_busca.strip()
-    produto = Produto.query.filter(or_(
-        Produto.nome.ilike(f'%{termo_limpo}%'),
-        Produto.sku_produtos.ilike(f'%{termo_limpo}%')
-    )).first()
-    
-    if produto: return produto, None 
-
-    if termo_limpo.lower().endswith('s'):
-        termo_singular = termo_limpo[:-1]
-        produto = Produto.query.filter(Produto.nome.ilike(f'%{termo_singular}%')).first()
-        if produto: return produto, f"(Assumi que '{termo_limpo}' era '{produto.nome}')"
-
-    todos_produtos = db.session.query(Produto.id, Produto.nome).all()
-    nomes_db = [p.nome for p in todos_produtos]
-    matches = difflib.get_close_matches(termo_limpo, nomes_db, n=1, cutoff=0.5)
-    
-    if matches:
-        nome_encontrado = matches[0]
-        produto = Produto.query.filter_by(nome=nome_encontrado).first()
-        return produto, f"(Não achei '{termo_limpo}', mas encontrei '{nome_encontrado}'. Usei esse.)"
-        
-    return None, f"Não encontrei nada parecido com '{termo_busca}'."
-
-# --- TOOLS GEMINI ---
-def api_alterar_estoque(nome_ou_sku, quantidade, usuario):
-    with app.app_context():
-        produto, msg_extra = encontrar_produto_inteligente(nome_ou_sku)
-        if not produto: return msg_extra
-        try: qtd_int = int(quantidade)
-        except: return "Erro: Quantidade inválida."
-        nova_qtd = produto.quantidade + qtd_int
-        if nova_qtd < 0: return f"Erro: O produto {produto.nome} só tem {produto.quantidade} unidades."
-        produto.quantidade = nova_qtd
-        acao_log = 'CHAT_ENTRADA' if qtd_int > 0 else 'CHAT_SAIDA'
-        db.session.add(Log(tipo_item='produto', item_id=produto.id, acao=acao_log, quantidade=abs(qtd_int), usuario_nome=usuario))
-        db.session.commit()
-        feedback = f"Sucesso! Estoque de {produto.nome} foi para {produto.quantidade}."
-        if msg_extra: feedback += f" {msg_extra}"
-        return feedback
-
-def api_movimentar_amostra(nome_ou_pat, acao, cliente_destino, usuario):
-    with app.app_context():
-        amostra = Amostra.query.filter(or_(
-            Amostra.nome.ilike(f'%{nome_ou_pat}%'),
-            Amostra.codigo_patrimonio.ilike(f'%{nome_ou_pat}%'),
-            Amostra.sku_amostras.ilike(f'%{nome_ou_pat}%')
-        )).first()
-        
-        if not amostra:
-            todos = db.session.query(Amostra.nome).all()
-            nomes = [a.nome for a in todos]
-            matches = difflib.get_close_matches(nome_ou_pat, nomes, n=1, cutoff=0.6)
-            if matches: amostra = Amostra.query.filter_by(nome=matches[0]).first()
-            else: return f"Erro: Amostra '{nome_ou_pat}' não encontrada."
-
-        if acao.lower() == 'retirar':
-            if amostra.status != 'DISPONIVEL': return f"Erro: A amostra {amostra.nome} já está com {amostra.vendedor_responsavel}."
-            amostra.status = 'EM_RUA'
-            amostra.vendedor_responsavel = usuario
-            amostra.cliente_destino = cliente_destino or "Cliente Não Informado (Via Chat)"
-            amostra.data_saida = datetime.now()
-            amostra.data_prevista_retorno = datetime.now() + timedelta(days=7)
-            db.session.add(Log(tipo_item='amostra', item_id=amostra.id, acao='CHAT_RETIRADA', usuario_nome=usuario))
-        
-        elif acao.lower() == 'devolver':
-            if amostra.status == 'DISPONIVEL': return f"A amostra {amostra.nome} já consta como disponível."
-            amostra.status = 'DISPONIVEL'
-            amostra.vendedor_responsavel = None
-            amostra.cliente_destino = None
-            db.session.add(Log(tipo_item='amostra', item_id=amostra.id, acao='CHAT_DEVOLUCAO', usuario_nome=usuario))
-        else: return "Ação desconhecida. Use 'retirar' ou 'devolver'."
-
-        db.session.commit()
-        return f"Feito! Amostra {amostra.nome} agora está {amostra.status}."
-
-def api_consultar(termo):
-    with app.app_context():
-        p, _ = encontrar_produto_inteligente(termo)
-        res_p = f"Produto: {p.nome} | Qtd: {p.quantidade} | Local: {p.localizacao}" if p else ""
-        a = Amostra.query.filter(Amostra.nome.ilike(f'%{termo}%')).first()
-        if not a:
-            todos = [x.nome for x in db.session.query(Amostra.nome).all()]
-            match = difflib.get_close_matches(termo, todos, n=1, cutoff=0.6)
-            if match: a = Amostra.query.filter_by(nome=match[0]).first()
-        status_a = f"Com {a.vendedor_responsavel}" if a and a.status != 'DISPONIVEL' else "Disponível"
-        res_a = f"Amostra: {a.nome} | Status: {status_a}" if a else ""
-        if not p and not a: return "Não encontrei nada parecido no estoque nem nas amostras."
-        return f"{res_p}\n{res_a}"
-
-tools_gemini = [api_alterar_estoque, api_movimentar_amostra, api_consultar]
-
-if GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-    except Exception as e:
-        print(f"Erro ao configurar GENAI: {e}", flush=True)
-
-# --- GERADOR PDF REPORTLAB (CORRIGIDO PARA EVITAR ERRO 500) ---
+# --- GERADOR PDF REPORTLAB ---
 def gerar_pdf_protocolo(protocolo):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
@@ -273,7 +169,7 @@ def gerar_pdf_protocolo(protocolo):
     elements.append(t_cliente)
     elements.append(Spacer(1, 0.5 * cm))
 
-    # Itens - TRATAMENTO ROBUSTO DE NULOS
+    # Itens
     elements.append(Paragraph("<b>ITENS SOLICITADOS</b>", styles['Heading4']))
     
     data_itens = [['SKU', 'PRODUTO / DESCRIÇÃO', 'QTD', 'UNIT.', 'TOTAL']]
@@ -282,12 +178,10 @@ def gerar_pdf_protocolo(protocolo):
     if protocolo.itens_json:
         for item in protocolo.itens_json:
             try:
-                # Garante que valores nulos no JSON virem 0 ou string vazia
                 sku_txt = str(item.get('sku') or '-')
                 nome_txt = str(item.get('nome') or 'Item sem nome')
                 qtd_txt = str(item.get('qtd') or '1')
                 
-                # Conversão segura de valores numéricos
                 raw_unit = item.get('preco_unit')
                 raw_total = item.get('subtotal')
                 
@@ -304,7 +198,6 @@ def gerar_pdf_protocolo(protocolo):
                     f"R$ {val_total:.2f}"
                 ])
             except Exception as e:
-                # Se algo der muito errado em uma linha, loga e pula a linha ou insere erro
                 print(f"Erro processando item PDF: {e}")
                 data_itens.append(["ERR", "Erro nos dados do item", "0", "0.00", "0.00"])
             
@@ -357,7 +250,7 @@ def enviar_email_protocolo(protocolo, pdf_bytes):
         msg['To'] = f"{protocolo.vendedor_email}, {EMAIL_CHEFE}"
         msg['Subject'] = f"Protocolo #{protocolo.id} - {protocolo.cliente_empresa}"
 
-        body = f"Olá,\n\nSegue em anexo o protocolo #{protocolo.id} gerado para o cliente {protocolo.cliente_empresa}.\n\nSistema EloStock."
+        body = f"Olá,\n\nSegue em anexo o protocolo #{protocolo.id} gerado para o cliente {protocolo.cliente_empresa}.\n\nSistema Elo Showroom."
         msg.attach(MIMEText(body, 'plain'))
 
         part = MIMEApplication(pdf_bytes, Name=f"Protocolo_{protocolo.id}.pdf")
@@ -375,7 +268,7 @@ def enviar_email_protocolo(protocolo, pdf_bytes):
 
 # --- ROTAS ---
 
-@app.route('/elostock/', methods=['GET', 'POST'])
+@app.route('/showroom/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST' and 'login_email' in request.form:
         email = request.form.get('login_email')
@@ -387,7 +280,6 @@ def index():
                 token = resp.json()['data']['access_token']
                 session['user_token'] = token
                 session['user_email'] = email
-                session['chat_history'] = []
                 headers = {"Authorization": f"Bearer {token}"}
                 user_info = requests.get(f"{DIRECTUS_URL}/users/me?fields=role.name", headers=headers, verify=False)
                 if user_info.status_code == 200:
@@ -396,28 +288,29 @@ def index():
                     session['user_role'] = role_name.upper()
                 else:
                     session['user_role'] = 'PUBLIC'
-                return redirect('/elostock/dashboard')
+                return redirect('/showroom/dashboard')
             return render_template('index.html', view_mode='login', erro="Credenciais inválidas.")
         except Exception as e:
             return render_template('index.html', view_mode='login', erro=f"Erro de Conexão: {str(e)}")
-    if 'user_email' in session: return redirect('/elostock/dashboard')
+    if 'user_email' in session: return redirect('/showroom/dashboard')
     return render_template('index.html', view_mode='login')
 
-@app.route('/elostock/dashboard')
+@app.route('/showroom/dashboard')
 def dashboard():
-    if 'user_email' not in session: return redirect('/elostock/')
+    if 'user_email' not in session: return redirect('/showroom/')
     role = session.get('user_role', 'PUBLIC')
     search_query = request.args.get('q', '').strip()
     filter_cat = request.args.get('cat', '').strip()
     filter_sub = request.args.get('sub', '').strip() 
 
-    produtos = []
+    # Somente Showroom e Amostras
     produtos_showroom = [] 
     amostras = []
     
-    cats_prod_raw = db.session.query(Produto.categoria_produtos).distinct().all()
+    # Busca Categorias somente de itens Showroom/Amostra
+    cats_prod_raw = db.session.query(Produto.categoria_produtos).filter(Produto.categoria_produtos.ilike('%showroom%')).distinct().all()
     cats_amos_raw = db.session.query(Amostra.categoria_amostra).distinct().all()
-    subs_raw = db.session.query(Produto.subcategoria).distinct().all() 
+    subs_raw = db.session.query(Produto.subcategoria).filter(Produto.categoria_produtos.ilike('%showroom%')).distinct().all() 
 
     cats_set = set()
     for c in cats_prod_raw:
@@ -427,57 +320,36 @@ def dashboard():
     
     categorias_disponiveis = sorted(list(cats_set))
     subcategorias_disponiveis = sorted([s[0] for s in subs_raw if s[0]]) 
-
-    ver_tudo = role == 'ADMINISTRATOR'
-    ver_compras = role == 'COMPRAS' or ver_tudo
-    ver_vendas = role == 'VENDAS' or ver_tudo
     
-    # 1. ALMOXARIFADO (Tudo que NÃO é Showroom)
-    if ver_compras:
-        query = Produto.query
-        query = query.filter(or_(
-            Produto.categoria_produtos == None,
-            ~Produto.categoria_produtos.ilike('%showroom%')
-        ))
-        if search_query: 
-            query = query.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
-        if filter_cat: 
-            query = query.filter(Produto.categoria_produtos == filter_cat)
-        if filter_sub:
-            query = query.filter(Produto.subcategoria == filter_sub)
-            
-        produtos = query.order_by(Produto.nome).all()
-        
-    # 2. SHOWROOM (Produtos Showroom + Amostras Únicas)
-    if ver_vendas:
-        # 2a. Produtos do Showroom (Tem Quantidade)
-        query_sp = Produto.query.filter(Produto.categoria_produtos.ilike('%showroom%'))
-        if search_query: 
-            query_sp = query_sp.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
-        if filter_cat:
-             query_sp = query_sp.filter(Produto.categoria_produtos == filter_cat)
-        if filter_sub: 
-             query_sp = query_sp.filter(Produto.subcategoria == filter_sub)
-             
-        produtos_showroom = query_sp.order_by(Produto.nome).all()
+    # 1. Produtos do Showroom (Tem Quantidade e Categoria "Showroom")
+    query_sp = Produto.query.filter(Produto.categoria_produtos.ilike('%showroom%'))
+    if search_query: 
+        query_sp = query_sp.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
+    if filter_cat:
+         query_sp = query_sp.filter(Produto.categoria_produtos == filter_cat)
+    if filter_sub: 
+         query_sp = query_sp.filter(Produto.subcategoria == filter_sub)
+         
+    produtos_showroom = query_sp.order_by(Produto.nome).all()
 
-        # 2b. Amostras Únicas (Patrimônio)
-        query = Amostra.query
-        if search_query: query = query.filter(or_(Amostra.nome.ilike(f'%{search_query}%'), Amostra.sku_amostras.ilike(f'%{search_query}%')))
-        if filter_cat: query = query.filter(Amostra.categoria_amostra == filter_cat)
-        
-        amostras = query.order_by(Amostra.status.desc(), Amostra.nome).all()
+    # 2. Amostras Únicas (Patrimônio)
+    query_am = Amostra.query
+    if search_query: query_am = query_am.filter(or_(Amostra.nome.ilike(f'%{search_query}%'), Amostra.sku_amostras.ilike(f'%{search_query}%')))
+    if filter_cat: query_am = query_am.filter(Amostra.categoria_amostra == filter_cat)
+    
+    amostras = query_am.order_by(Amostra.status.desc(), Amostra.nome).all()
     
     return render_template('index.html', view_mode='dashboard', 
-                           produtos=produtos, produtos_showroom=produtos_showroom, amostras=amostras, 
+                           produtos_showroom=produtos_showroom, amostras=amostras, 
                            categorias=categorias_disponiveis, subcategorias=subcategorias_disponiveis,
                            search_query=search_query, selected_cat=filter_cat, selected_sub=filter_sub,
                            user=session['user_email'], role=role)
 
-@app.route('/elostock/protocolos')
+@app.route('/showroom/protocolos')
 def listar_protocolos():
-    if 'user_email' not in session: return redirect('/elostock/')
+    if 'user_email' not in session: return redirect('/showroom/')
     role = session.get('user_role', 'PUBLIC')
+    # Admin ou Vendas veem seus protocolos (ou todos no caso de Admin)
     if role == 'ADMINISTRATOR':
         protocolos = Protocolo.query.order_by(Protocolo.id.desc()).all()
     else:
@@ -485,9 +357,9 @@ def listar_protocolos():
     
     return render_template('index.html', view_mode='protocolos', protocolos=protocolos, user=session['user_email'], role=role)
 
-@app.route('/elostock/protocolo/novo', methods=['GET', 'POST'])
+@app.route('/showroom/protocolo/novo', methods=['GET', 'POST'])
 def novo_protocolo():
-    if 'user_email' not in session: return redirect('/elostock/')
+    if 'user_email' not in session: return redirect('/showroom/')
     
     if request.method == 'POST':
         acao = request.form.get('acao')
@@ -521,11 +393,8 @@ def novo_protocolo():
                         Produto.categoria_produtos.ilike('%showroom%')
                     ).first()
 
-                    # 2. Se não, tenta Amostra (mas amostra geralmente nao tem preço unitario cadastrado, assume 0)
-                    if not prod:
-                        # Aqui poderia buscar preço de outro lugar se necessário
-                        pass 
-
+                    # Se não, Amostras geralmente não têm preço unitário definido aqui, assume 0
+                    
                     preco = float(prod.valor_unitario) if (prod and prod.valor_unitario) else 0.0
                     subtotal = preco * qtd_val
                     total_geral += subtotal
@@ -559,7 +428,6 @@ def novo_protocolo():
                     if nomes[i].strip():
                         qtd_val = int(qtds[i])
                         
-                        # Busca para pegar o preço e salvar no JSON
                         prod = Produto.query.filter(
                             or_(Produto.sku_produtos == skus[i], Produto.nome == nomes[i]),
                             Produto.categoria_produtos.ilike('%showroom%')
@@ -590,13 +458,12 @@ def novo_protocolo():
                 
                 db.session.add(novo)
                 
-                # --- PROCESSAR BAIXA/STATUS (CRÍTICO) ---
+                # --- PROCESSAR BAIXA/STATUS ---
                 for item in itens_json:
                     sku = item.get('sku')
                     nome = item.get('nome')
                     qtd_saida = int(item.get('qtd', 1))
 
-                    # LÓGICA UNIFICADA:
                     # 1. Tenta achar Amostra Única (Patrimônio)
                     amostra_db = None
                     if sku: amostra_db = Amostra.query.filter_by(sku_amostras=sku).first()
@@ -612,7 +479,6 @@ def novo_protocolo():
                     
                     # 2. Se não for Amostra Única, DEVE ser Produto Showroom (Baixa Estoque)
                     elif not amostra_db:
-                        # Busca forçada na categoria Showroom
                         prod_db = Produto.query.filter(
                             or_(Produto.sku_produtos == sku, Produto.nome == nome),
                             Produto.categoria_produtos.ilike('%showroom%')
@@ -636,7 +502,7 @@ def novo_protocolo():
                 pdf_bytes = gerar_pdf_protocolo(novo)
                 enviar_email_protocolo(novo, pdf_bytes)
                 
-                return redirect('/elostock/protocolos')
+                return redirect('/showroom/protocolos')
                 
             except Exception as e:
                 db.session.rollback()
@@ -664,9 +530,9 @@ def novo_protocolo():
 
     return render_template('index.html', view_mode='novo_protocolo', user=session['user_email'], produtos_db=lista_final)
 
-@app.route('/elostock/protocolo/download/<int:id>')
+@app.route('/showroom/protocolo/download/<int:id>')
 def download_protocolo(id):
-    if 'user_email' not in session: return redirect('/elostock/')
+    if 'user_email' not in session: return redirect('/showroom/')
     
     try:
         protocolo = Protocolo.query.get_or_404(id)
@@ -680,70 +546,23 @@ def download_protocolo(id):
         print(f"Erro no Download PDF: {traceback.format_exc()}")
         return f"Erro interno ao gerar PDF: {str(e)}", 500
 
-@app.route('/elostock/api/chat', methods=['POST'])
-def api_chat():
-    if 'user_email' not in session: return jsonify({"response": "Você precisa estar logado."}), 401
-    data = request.json
-    user_msg = data.get('message')
-    usuario_atual = session['user_email']
-    historico = session.get('chat_history', [])
-    if len(historico) > 6: historico = historico[-6:]
-
-    if not GEMINI_API_KEY: return jsonify({"response": "ERRO: GEMINI_API_KEY não configurada."})
-
-    try:
-        modelos_disponiveis = []
-        try:
-            for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods: modelos_disponiveis.append(m.name)
-        except: pass
-        modelo_escolhido = 'models/gemini-1.5-flash'
-        if modelos_disponiveis:
-            found_flash = next((m for m in modelos_disponiveis if 'flash' in m.lower()), None)
-            if found_flash: modelo_escolhido = found_flash
-            else: modelo_escolhido = modelos_disponiveis[0]
-
-        generation_config = {"temperature": 0.3, "top_p": 0.95, "top_k": 40, "max_output_tokens": 1024, "response_mime_type": "text/plain"}
-        model = genai.GenerativeModel(model_name=modelo_escolhido, tools=tools_gemini, generation_config=generation_config)
-        hist_str = "\n".join([f"{h['role']}: {h['text']}" for h in historico])
-        
-        prompt_sistema = f"""
-        Você é o assistente inteligente do EloStock. Usuário: {usuario_atual}.
-        Histórico recente: {hist_str}
-        REGRAS: 1. Busque produto com precisão. 2. Informe se usou nome diferente. 3. Passe '{usuario_atual}' no usuario das tools.
-        """
-        
-        chat = model.start_chat(enable_automatic_function_calling=True)
-        response = chat.send_message(f"{prompt_sistema}\nUsuário diz: {user_msg}")
-        
-        historico.append({"role": "user", "text": user_msg})
-        historico.append({"role": "assistant", "text": response.text})
-        session['chat_history'] = historico
-
-        return jsonify({"response": response.text})
-
-    except Exception as e:
-        erro_bruto = traceback.format_exc()
-        print(f"❌ ERRO GRAVE NO CHAT: {erro_bruto}", flush=True)
-        return jsonify({"response": f"ERRO TÉCNICO: {str(e)}"})
-
-@app.route('/elostock/acao/<tipo>/<int:id>', methods=['GET', 'POST'])
+@app.route('/showroom/acao/<tipo>/<int:id>', methods=['GET', 'POST'])
 def acao(tipo, id):
-    if 'user_email' not in session: return redirect('/elostock/')
+    if 'user_email' not in session: return redirect('/showroom/')
     role = session.get('user_role', 'PUBLIC')
     msg_sucesso = None
     item = None
 
     if tipo == 'produto':
+        # Aqui, por definição do novo escopo, TODO produto acessado deve ser Showroom
         item = Produto.query.get_or_404(id)
         
-        # --- LÓGICA UNIFICADA: SE FOR SHOWROOM, VIRA "AMOSTRA" NA VISUALIZAÇÃO ---
-        is_showroom = 'showroom' in (item.categoria_produtos or '').lower()
-
-        if is_showroom:
-            # Truque para usar o template de Gestão (Protocolo/Venda/Baixa)
+        # Confirma se é showroom para segurança
+        if 'showroom' in (item.categoria_produtos or '').lower():
+            
+            # Truque para usar o template de Gestão visual (Protocolo/Venda/Baixa)
             tipo_visualizacao = 'amostra' 
-            # Mapeia campos para não quebrar o HTML
+            # Mapeia campos para não quebrar o HTML que espera campos de Amostra
             item.sku_amostras = item.sku_produtos
             item.categoria_amostra = item.categoria_produtos
             item.status = 'DISPONIVEL' # Para liberar os botões
@@ -752,14 +571,6 @@ def acao(tipo, id):
 
             if request.method == 'POST':
                 acao_realizada = request.form.get('acao_amostra')
-                
-                # Showroom: Venda ou Baixa zera o estoque (ou decrementa, mas aqui zera o item específico visualizado se fosse único,
-                # MAS como é produto com quantidade, vamos assumir que essa tela de gestão específica baixa TUDO ou trata unitário?
-                # No seu pedido anterior, era para comportar como amostra.
-                # Se clicar em "Vendido" na tela de um produto com 10 unidades, vamos vender 1 unidade ou tudo?
-                # Pela lógica de "Protocolo" (que pede qtd), aqui vamos baixar 1 unidade por padrão se for ação rápida, 
-                # mas o form de "Amostra" não tem campo Qtd. 
-                # -> Solução Segura: Baixar 1 unidade.
                 
                 if acao_realizada in ['vendido', 'fora_linha']:
                     if item.quantidade > 0:
@@ -778,19 +589,11 @@ def acao(tipo, id):
                         msg_sucesso = "Erro: Sem estoque para baixar."
 
             return render_template('index.html', view_mode='acao', item=item, tipo='amostra', msg=msg_sucesso)
-
+        
         else:
-            # --- ALMOXARIFADO PADRÃO (Retirada Simples) ---
-            if role == 'VENDAS': return "⛔ Acesso Negado"
-            if request.method == 'POST':
-                qtd = int(request.form.get('qtd', 1))
-                item.quantidade -= qtd
-                db.session.add(Log(tipo_item='produto', item_id=item.id, acao='WEB_RETIRADA', quantidade=qtd, usuario_nome=session['user_email']))
-                db.session.commit()
-                msg_sucesso = f"Retirado {qtd} un de {item.nome}."
+            return "⛔ Acesso Negado: Este item não pertence ao Showroom."
 
     elif tipo == 'amostra':
-        if role == 'COMPRAS': return "⛔ Acesso Negado"
         item = Amostra.query.get_or_404(id)
         
         if request.method == 'POST':
@@ -816,13 +619,13 @@ def acao(tipo, id):
 
     return render_template('index.html', view_mode='acao', item=item, tipo=tipo, msg=msg_sucesso)
 
-@app.route('/elostock/logout')
+@app.route('/showroom/logout')
 def logout():
     session.clear()
-    return redirect('/elostock/')
+    return redirect('/showroom/')
 
 if slack_app:
-    @app.route("/elostock/slack/events", methods=["POST"])
+    @app.route("/showroom/slack/events", methods=["POST"])
     def slack_events(): return handler.handle(request)
 
 if __name__ == '__main__':
