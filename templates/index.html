@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>EloStock Logística</title>
+    <title>Elo Showroom</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
@@ -114,23 +114,6 @@
         .bg-light { background-color: rgba(255,255,255,0.05) !important; border-bottom: 1px solid var(--border-color); }
         .border-bottom { border-bottom-color: var(--border-color) !important; }
 
-        /* CHATBOT */
-        #chat-btn { 
-            background-color: var(--brand-wine); border-color: var(--brand-wine);
-            position: fixed; bottom: 20px; right: 20px; z-index: 1000; width: 60px; height: 60px; border-radius: 50%; font-size: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); 
-        }
-        #chat-window { 
-            background-color: var(--brand-card);
-            position: fixed; bottom: 90px; right: 20px; z-index: 1000; width: 350px; height: 450px; display: none; flex-direction: column; border: 1px solid var(--border-color); border-radius: 15px; overflow: hidden; box-shadow: 0 5px 25px rgba(0,0,0,0.5); 
-        }
-        .chat-header { background: var(--brand-wine); color: white; padding: 15px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
-        .chat-body { flex: 1; background: var(--brand-card); padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; font-size: 0.9rem; }
-        .chat-footer { padding: 10px; background: rgba(0,0,0,0.2); border-top: 1px solid var(--border-color); display: flex; gap: 5px; }
-        .msg { padding: 8px 12px; border-radius: 12px; max-width: 80%; }
-        .msg-user { background: #333; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
-        .msg-ai { background: rgba(227, 25, 55, 0.15); color: #ffb3b3; border: 1px solid rgba(227, 25, 55, 0.3); align-self: flex-start; border-bottom-left-radius: 2px; }
-        .typing { font-size: 0.8rem; color: #777; font-style: italic; display: none; margin-left: 10px; }
-        
         /* Scrollbar */
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: var(--brand-dark); }
@@ -143,7 +126,7 @@
     <div class="container d-flex align-items-center justify-content-center" style="height: 100vh;">
         <div class="content-box text-center" style="width: 100%; max-width: 400px; border-top: 4px solid var(--brand-wine);">
             <i class="bi bi-shield-lock-fill mb-3" style="font-size: 3rem; color: var(--brand-wine);"></i>
-            <h3 class="fw-bold mb-4 text-white">Acesso Restrito</h3>
+            <h3 class="fw-bold mb-4 text-white">Acesso Showroom</h3>
             {% if erro %}<div class="alert alert-danger py-2 small bg-danger bg-opacity-25 text-danger border-danger border-opacity-25">{{ erro }}</div>{% endif %}
             <form method="POST">
                 <input type="email" name="login_email" class="form-control mb-3" placeholder="E-mail Corporativo" required>
@@ -156,11 +139,11 @@
     {% elif view_mode == 'dashboard' %}
     <nav class="navbar navbar-dark bg-dark mb-4">
         <div class="container">
-            <span class="navbar-brand fw-bold">EloStock <span class="badge bg-secondary ms-2" style="font-size: 0.7em; background-color: var(--brand-wine) !important;">{{ role }}</span></span>
+            <span class="navbar-brand fw-bold">Elo Showroom</span>
             <div class="d-flex align-items-center gap-3">
-                <a href="/elostock/protocolos" class="btn btn-outline-light btn-sm"><i class="bi bi-file-earmark-pdf"></i> Protocolos</a>
+                <a href="/showroom/protocolos" class="btn btn-outline-light btn-sm"><i class="bi bi-file-earmark-pdf"></i> Protocolos</a>
                 <span class="text-white small d-none d-md-block">{{ user }}</span>
-                <a href="/elostock/logout" class="btn btn-outline-secondary btn-sm">Sair</a>
+                <a href="/showroom/logout" class="btn btn-outline-secondary btn-sm">Sair</a>
             </div>
         </div>
     </nav>
@@ -168,7 +151,7 @@
     <div class="container">
         
         <div class="content-box py-3 mb-4">
-            <form action="/elostock/dashboard" method="GET" class="row g-3 align-items-center">
+            <form action="/showroom/dashboard" method="GET" class="row g-3 align-items-center">
                 <div class="col-md-5">
                     <div class="input-group">
                         <span class="input-group-text"><i class="bi bi-search"></i></span>
@@ -197,41 +180,7 @@
 
         <div class="row g-4 justify-content-center">
             
-            {% if produtos|length > 0 or (role == 'ADMINISTRATOR' and amostras|length == 0 and produtos_showroom|length == 0) %}
-            <div class="{{ 'col-12' if (amostras|length == 0 and produtos_showroom|length == 0) else 'col-lg-5' }}">
-                <div class="content-box p-0 h-100">
-                    <div class="p-3 border-bottom bg-light rounded-top d-flex justify-content-between align-items-center">
-                        <h6 class="mb-0 fw-bold text-white">📦 Almoxarifado</h6>
-                        <span class="badge bg-secondary">{{ produtos|length }} itens</span>
-                    </div>
-                    <div class="p-3">
-                        {% for p in produtos %}
-                        {% set critico = p.quantidade <= (p.estoque_minimo or 0) %}
-                        <div class="card-item py-3 d-flex justify-content-between align-items-center {{ 'rounded px-2' if critico else '' }}" style="{{ 'background-color: rgba(220, 53, 69, 0.15); border-bottom: none !important;' if critico else '' }}">
-                            <div style="max-width: 70%;">
-                                <div class="fw-bold">{{ p.nome }}</div>
-                                <div class="d-flex gap-2 mt-2 flex-wrap align-items-center">
-                                    {% if p.sku_produtos %}<span class="badge-sku"><i class="bi bi-upc-scan"></i> {{ p.sku_produtos }}</span>{% endif %}
-                                    {% if p.categoria_produtos %}<span class="badge-cat">{{ p.categoria_produtos }}</span>{% endif %}
-                                    {% if p.subcategoria %}<span class="badge-sub">{{ p.subcategoria }}</span>{% endif %}
-                                </div>
-                                <small class="text-muted d-block mt-1">{{ p.localizacao }}</small>
-                            </div>
-                            <div class="text-end">
-                                <div class="h5 mb-0 fw-bold text-white">{{ p.quantidade }}</div>
-                                <a href="/elostock/acao/produto/{{ p.id }}" class="btn btn-link btn-sm p-0 text-decoration-none" style="color: var(--brand-wine);">Retirar</a>
-                            </div>
-                        </div>
-                        {% else %}
-                            <div class="p-4 text-center text-muted">Acesso restrito ou nenhum produto.</div>
-                        {% endfor %}
-                    </div>
-                </div>
-            </div>
-            {% endif %}
-
-            {% if amostras|length > 0 or produtos_showroom|length > 0 or (role == 'ADMINISTRATOR' and produtos|length == 0) %}
-            <div class="{{ 'col-12' if produtos|length == 0 else 'col-lg-7' }}">
+            <div class="col-12">
                 <div class="content-box p-0 h-100">
                     <div class="p-3 border-bottom bg-light rounded-top d-flex justify-content-between align-items-center">
                         <h6 class="mb-0 fw-bold text-white">💎 Showroom & Logística</h6>
@@ -254,7 +203,7 @@
                                 </div>
                                 <div class="text-end">
                                     <div class="h5 mb-0 fw-bold text-white">{{ p.quantidade }}</div>
-                                    <a href="/elostock/acao/produto/{{ p.id }}" class="btn btn-link btn-sm p-0 text-decoration-none" style="color: var(--brand-wine);">Retirar</a>
+                                    <a href="/showroom/acao/produto/{{ p.id }}" class="btn btn-link btn-sm p-0 text-decoration-none" style="color: var(--brand-wine);">Gerenciar</a>
                                 </div>
                             </div>
                             {% endfor %}
@@ -295,7 +244,7 @@
                                         <div class="small text-muted pt-1"><i class="bi bi-truck me-1"></i> Destino: <strong class="text-light">{{ a.cliente_destino or 'Não inf.' }}</strong></div>
                                     </div>
                                 {% endif %}
-                                <a href="/elostock/acao/amostra/{{ a.id }}" class="btn btn-outline-dark btn-sm w-100 mt-2 rounded-pill" style="border-color: rgba(255,255,255,0.2); color: #ccc;">Gerenciar</a>
+                                <a href="/showroom/acao/amostra/{{ a.id }}" class="btn btn-outline-dark btn-sm w-100 mt-2 rounded-pill" style="border-color: rgba(255,255,255,0.2); color: #ccc;">Gerenciar</a>
                             </div>
                             {% endfor %}
                         {% elif produtos_showroom|length == 0 %}
@@ -304,64 +253,9 @@
                     </div>
                 </div>
             </div>
-            {% endif %}
+            
         </div>
     </div>
-
-    <button id="chat-btn" class="btn btn-primary" onclick="toggleChat()"><i class="bi bi-chat-dots-fill"></i></button>
-    <div id="chat-window" class="content-box p-0">
-        <div class="chat-header">
-            <span>Assistente IA</span>
-            <button type="button" class="btn-close btn-close-white" onclick="toggleChat()"></button>
-        </div>
-        <div class="chat-body" id="chat-msgs">
-            <div class="msg msg-ai">Olá! Eu posso atualizar o estoque ou registrar saída de amostras para você. O que deseja?</div>
-        </div>
-        <div class="typing" id="typing-indicator">IA digitando...</div>
-        <div class="chat-footer">
-            <input type="text" id="chat-input" class="form-control form-control-sm" placeholder="Ex: Retirei 5 cadernos..." onkeypress="handleEnter(event)">
-            <button class="btn btn-primary btn-sm" onclick="sendMessage()"><i class="bi bi-send-fill"></i></button>
-        </div>
-    </div>
-
-    <script>
-        function toggleChat() {
-            const w = document.getElementById('chat-window');
-            w.style.display = w.style.display === 'flex' ? 'none' : 'flex';
-        }
-        function handleEnter(e) { if(e.key === 'Enter') sendMessage(); }
-        async function sendMessage() {
-            const input = document.getElementById('chat-input');
-            const txt = input.value.trim();
-            if(!txt) return;
-            addMsg(txt, 'user');
-            input.value = '';
-            document.getElementById('typing-indicator').style.display = 'block';
-            try {
-                const req = await fetch('/elostock/api/chat', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({message: txt})
-                });
-                const res = await req.json();
-                document.getElementById('typing-indicator').style.display = 'none';
-                addMsg(res.response, 'ai');
-                if(res.response.toLowerCase().includes('sucesso') || res.response.toLowerCase().includes('feito')) {
-                    setTimeout(() => location.reload(), 2000);
-                }
-            } catch(e) {
-                document.getElementById('typing-indicator').style.display = 'none';
-                addMsg("Erro de conexão.", 'ai');
-            }
-        }
-        function addMsg(txt, type) {
-            const div = document.createElement('div');
-            div.className = `msg msg-${type}`;
-            div.innerText = txt;
-            document.getElementById('chat-msgs').appendChild(div);
-            document.getElementById('chat-msgs').scrollTop = document.getElementById('chat-msgs').scrollHeight;
-        }
-    </script>
 
     {% elif view_mode == 'acao' %}
     <div class="container d-flex align-items-center justify-content-center" style="min-height: 100vh;">
@@ -371,63 +265,53 @@
                     <div class="text-success mb-3"><i class="bi bi-check-circle-fill fs-1"></i></div>
                     <h4 class="text-white">Sucesso!</h4>
                     <p class="text-muted">{{ msg }}</p>
-                    <a href="/elostock/dashboard" class="btn btn-outline-secondary w-100">Voltar</a>
+                    <a href="/showroom/dashboard" class="btn btn-outline-secondary w-100">Voltar</a>
                 </div>
             {% else %}
-                <h5 class="text-secondary small text-uppercase mb-1">Gerenciando</h5>
+                <h5 class="text-secondary small text-uppercase mb-1">Gerenciando Showroom</h5>
                 <h2 class="fw-bold mb-4 text-white">{{ item.nome }}</h2>
                 <form method="POST">
-                    {% if tipo == 'produto' %}
-                        <div class="text-center mb-4">
-                            <span class="display-5 fw-bold text-white">{{ item.quantidade }}</span>
-                            <span class="text-muted d-block">em estoque</span>
-                        </div>
-                        <label class="fw-bold text-white">Qtd Retirada</label>
-                        <input type="number" name="qtd" class="form-control mb-3" value="1" min="1" max="{{ item.quantidade }}">
-                        <button type="submit" class="btn btn-primary w-100 py-2">Confirmar</button>
-                    {% else %}
                         
-                        {% if item.status == 'DISPONIVEL' %}
-                            
-                            <div class="mb-4 text-center">
-                                <p class="text-muted small mb-2">Para retirar uma amostra, é obrigatório gerar o protocolo.</p>
-                                <a href="/elostock/protocolo/novo?item_sku={{ item.sku_amostras }}&item_nome={{ item.nome }}" class="btn btn-primary w-100 py-3 fw-bold">
-                                    <i class="bi bi-file-earmark-text-fill me-2"></i> GERAR PROTOCOLO DE SAÍDA
-                                </a>
+                    {% if item.status == 'DISPONIVEL' %}
+                        
+                        <div class="mb-4 text-center">
+                            <p class="text-muted small mb-2">Para retirar uma amostra do showroom, é obrigatório gerar o protocolo.</p>
+                            <a href="/showroom/protocolo/novo?item_sku={{ item.sku_amostras }}&item_nome={{ item.nome }}" class="btn btn-primary w-100 py-3 fw-bold">
+                                <i class="bi bi-file-earmark-text-fill me-2"></i> GERAR PROTOCOLO DE SAÍDA
+                            </a>
+                        </div>
+
+                        <hr class="border-secondary opacity-25 my-4">
+
+                        <p class="text-muted small text-center mb-2">Outras ações administrativas (Baixa Definitiva)</p>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <button type="submit" name="acao_amostra" value="vendido" class="btn btn-outline-info w-100 btn-sm">Marcar Vendido</button>
                             </div>
-
-                            <hr class="border-secondary opacity-25 my-4">
-
-                            <p class="text-muted small text-center mb-2">Outras ações administrativas</p>
-                            <div class="row g-2">
-                                <div class="col-6">
-                                    <button type="submit" name="acao_amostra" value="vendido" class="btn btn-outline-info w-100 btn-sm">Marcar Vendido</button>
-                                </div>
-                                <div class="col-6">
-                                    <button type="submit" name="acao_amostra" value="fora_linha" class="btn btn-outline-secondary w-100 btn-sm">Fora de Linha</button>
-                                </div>
+                            <div class="col-6">
+                                <button type="submit" name="acao_amostra" value="fora_linha" class="btn btn-outline-secondary w-100 btn-sm">Fora de Linha</button>
                             </div>
+                        </div>
 
-                        {% else %}
-                            <div class="alert alert-warning text-center bg-warning bg-opacity-10 border-warning border-opacity-25 text-warning">
-                                Status atual: <strong>{{ item.status }}</strong><br>
-                                Responsável: {{ item.vendedor_responsavel or 'N/A' }}
-                            </div>
-                            
-                            {% if item.status == 'EM_RUA' %}
-                                <input type="hidden" name="acao_amostra" value="devolver">
-                                <button type="submit" class="btn btn-success w-100 fw-bold py-2">Registrar Devolução</button>
-                            {% endif %}
-                            
-                            {% if item.status == 'VENDIDO' or item.status == 'FORA_DE_LINHA' %}
-                                <input type="hidden" name="acao_amostra" value="devolver">
-                                <button type="submit" class="btn btn-outline-light w-100 py-2">Reativar / Devolver ao Estoque</button>
-                            {% endif %}
-
+                    {% else %}
+                        <div class="alert alert-warning text-center bg-warning bg-opacity-10 border-warning border-opacity-25 text-warning">
+                            Status atual: <strong>{{ item.status }}</strong><br>
+                            Responsável: {{ item.vendedor_responsavel or 'N/A' }}
+                        </div>
+                        
+                        {% if item.status == 'EM_RUA' %}
+                            <input type="hidden" name="acao_amostra" value="devolver">
+                            <button type="submit" class="btn btn-success w-100 fw-bold py-2">Registrar Devolução</button>
                         {% endif %}
+                        
+                        {% if item.status == 'VENDIDO' or item.status == 'FORA_DE_LINHA' %}
+                            <input type="hidden" name="acao_amostra" value="devolver">
+                            <button type="submit" class="btn btn-outline-light w-100 py-2">Reativar / Devolver ao Estoque</button>
+                        {% endif %}
+
                     {% endif %}
                 </form>
-                <a href="/elostock/dashboard" class="d-block text-center mt-3 text-muted text-decoration-none small">Cancelar</a>
+                <a href="/showroom/dashboard" class="d-block text-center mt-3 text-muted text-decoration-none small">Cancelar</a>
             {% endif %}
         </div>
     </div>
@@ -435,15 +319,15 @@
     {% elif view_mode == 'protocolos' %}
     <nav class="navbar navbar-dark bg-dark mb-4">
         <div class="container">
-            <span class="navbar-brand fw-bold">EloStock | Protocolos</span>
-            <a href="/elostock/dashboard" class="btn btn-outline-secondary btn-sm">Voltar</a>
+            <span class="navbar-brand fw-bold">Elo Showroom | Protocolos</span>
+            <a href="/showroom/dashboard" class="btn btn-outline-secondary btn-sm">Voltar</a>
         </div>
     </nav>
     <div class="container">
         <div class="content-box">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h4 class="mb-0 text-white">Meus Protocolos</h4>
-                <a href="/elostock/protocolo/novo" class="btn btn-primary"><i class="bi bi-plus-lg"></i> Novo Protocolo</a>
+                <a href="/showroom/protocolo/novo" class="btn btn-primary"><i class="bi bi-plus-lg"></i> Novo Protocolo</a>
             </div>
             
             {% if protocolos|length > 0 %}
@@ -471,7 +355,7 @@
                                     {% else %}<span class="badge bg-success">Concluído</span>{% endif %}
                                 </td>
                                 <td class="text-end">
-                                    <a href="/elostock/protocolo/download/{{ p.id }}" class="btn btn-sm btn-outline-light"><i class="bi bi-download"></i> PDF</a>
+                                    <a href="/showroom/protocolo/download/{{ p.id }}" class="btn btn-sm btn-outline-light"><i class="bi bi-download"></i> PDF</a>
                                 </td>
                             </tr>
                             {% endfor %}
@@ -548,7 +432,7 @@
 
                         <div class="d-grid gap-2 mt-5">
                             <button type="submit" name="acao" value="confirmar" class="btn btn-primary fw-bold py-2">GERAR PROTOCOLO & ENVIAR EMAIL</button>
-                            <a href="/elostock/protocolos" class="btn btn-outline-dark">Cancelar</a>
+                            <a href="/showroom/protocolos" class="btn btn-outline-dark">Cancelar</a>
                         </div>
                     </form>
                 </div>
