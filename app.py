@@ -39,12 +39,16 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# Variáveis
+# Variáveis Externas
 DIRECTUS_URL = os.environ.get("DIRECTUS_URL")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
 
-# Configuração de E-mail
+# --- CONFIGURAÇÃO AUTENTIQUE ---
+AUTENTIQUE_TOKEN = os.environ.get("AUTENTIQUE_TOKEN")
+AUTENTIQUE_URL = "https://api.autentique.com.br/v2/graphql"
+
+# Configuração de E-mail (SMTP) - Mantido para notificações internas se necessário
 SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = os.environ.get("SMTP_PORT", 587)
 SMTP_USER = os.environ.get("SMTP_USER")     
@@ -115,7 +119,8 @@ class Protocolo(db.Model):
     data_criacao = db.Column(db.DateTime, default=datetime.now)
     data_prevista_devolucao = db.Column(db.DateTime)
 
-# --- GERADOR PDF REPORTLAB ---
+# --- FUNÇÕES AUXILIARES (PDF & EMAIL & AUTENTIQUE) ---
+
 def gerar_pdf_protocolo(protocolo):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
@@ -239,18 +244,82 @@ def gerar_pdf_protocolo(protocolo):
     buffer.seek(0)
     return buffer.getvalue()
 
-def enviar_email_protocolo(protocolo, pdf_bytes):
-    if not SMTP_USER or not SMTP_PASS:
-        print("⚠️ SMTP não configurado. Email não enviado.")
-        return
+def enviar_para_autentique(protocolo, pdf_bytes):
+    """ Envia o PDF para o Autentique via GraphQL """
+    if not AUTENTIQUE_TOKEN:
+        print("⚠️ Token Autentique não configurado.")
+        return {"erro": "Token Autentique não encontrado no .env"}
+
+    operations = {
+        "query": """
+        mutation CreateDocumentMutation(
+            $document: DocumentInput!,
+            $signers: [SignerInput!]!,
+            $file: Upload!
+        ) {
+            createDocument(
+                document: $document,
+                signers: $signers,
+                file: $file
+            ) {
+                id
+                name
+                signed
+                uploaded_at
+            }
+        }
+        """,
+        "variables": {
+            "document": {
+                "name": f"Protocolo de Amostra #{protocolo.id} - Elo Brindes",
+                "message": f"Olá {protocolo.cliente_nome}, por favor assine o protocolo de recebimento das amostras."
+            },
+            "signers": [
+                {
+                    "email": protocolo.cliente_email,
+                    "action": "SIGN",
+                    "positions": [{"x": "50", "y": "80", "z": "1"}] 
+                }
+            ],
+            "file": None
+        }
+    }
+
+    map_data = {"0": ["variables.file"]}
+    
+    files = {
+        "0": (f"protocolo_{protocolo.id}.pdf", pdf_bytes, "application/pdf")
+    }
+
+    headers = {"Authorization": f"Bearer {AUTENTIQUE_TOKEN}"}
+
+    try:
+        response = requests.post(
+            AUTENTIQUE_URL,
+            data={"operations": json.dumps(operations), "map": json.dumps(map_data)},
+            files=files,
+            headers=headers
+        )
+        resp_json = response.json()
+        
+        if "errors" in resp_json:
+            return {"erro": resp_json['errors'][0]['message']}
+            
+        return {"sucesso": True, "data": resp_json['data']['createDocument']}
+    except Exception as e:
+        return {"erro": str(e)}
+
+def enviar_email_interno(protocolo, pdf_bytes):
+    """ Envia cópia apenas para o vendedor/chefe se necessário (Fallback) """
+    if not SMTP_USER or not SMTP_PASS: return
 
     try:
         msg = MIMEMultipart()
         msg['From'] = SMTP_USER
         msg['To'] = f"{protocolo.vendedor_email}, {EMAIL_CHEFE}"
-        msg['Subject'] = f"Protocolo #{protocolo.id} - {protocolo.cliente_empresa}"
+        msg['Subject'] = f"Cópia Interna: Protocolo #{protocolo.id} - {protocolo.cliente_empresa}"
 
-        body = f"Olá,\n\nSegue em anexo o protocolo #{protocolo.id} gerado para o cliente {protocolo.cliente_empresa}.\n\nSistema Elo Showroom."
+        body = f"Protocolo #{protocolo.id} gerado.\nCliente: {protocolo.cliente_nome}\n\nEste documento foi/será enviado via Autentique."
         msg.attach(MIMEText(body, 'plain'))
 
         part = MIMEApplication(pdf_bytes, Name=f"Protocolo_{protocolo.id}.pdf")
@@ -262,9 +331,8 @@ def enviar_email_protocolo(protocolo, pdf_bytes):
         server.login(SMTP_USER, SMTP_PASS)
         server.sendmail(SMTP_USER, [protocolo.vendedor_email, EMAIL_CHEFE], msg.as_string())
         server.quit()
-        print(f"📧 Email enviado com sucesso para {protocolo.vendedor_email}")
     except Exception as e:
-        print(f"❌ Erro ao enviar email: {e}")
+        print(f"❌ Erro ao enviar email interno: {e}")
 
 # --- ROTAS ---
 
@@ -303,11 +371,9 @@ def dashboard():
     filter_cat = request.args.get('cat', '').strip()
     filter_sub = request.args.get('sub', '').strip() 
 
-    # Somente Showroom e Amostras
     produtos_showroom = [] 
     amostras = []
     
-    # Busca Categorias somente de itens Showroom/Amostra
     cats_prod_raw = db.session.query(Produto.categoria_produtos).filter(Produto.categoria_produtos.ilike('%showroom%')).distinct().all()
     cats_amos_raw = db.session.query(Amostra.categoria_amostra).distinct().all()
     subs_raw = db.session.query(Produto.subcategoria).filter(Produto.categoria_produtos.ilike('%showroom%')).distinct().all() 
@@ -321,7 +387,6 @@ def dashboard():
     categorias_disponiveis = sorted(list(cats_set))
     subcategorias_disponiveis = sorted([s[0] for s in subs_raw if s[0]]) 
     
-    # 1. Produtos do Showroom (Tem Quantidade e Categoria "Showroom")
     query_sp = Produto.query.filter(Produto.categoria_produtos.ilike('%showroom%'))
     if search_query: 
         query_sp = query_sp.filter(or_(Produto.nome.ilike(f'%{search_query}%'), Produto.sku_produtos.ilike(f'%{search_query}%')))
@@ -332,7 +397,6 @@ def dashboard():
          
     produtos_showroom = query_sp.order_by(Produto.nome).all()
 
-    # 2. Amostras Únicas (Patrimônio)
     query_am = Amostra.query
     if search_query: query_am = query_am.filter(or_(Amostra.nome.ilike(f'%{search_query}%'), Amostra.sku_amostras.ilike(f'%{search_query}%')))
     if filter_cat: query_am = query_am.filter(Amostra.categoria_amostra == filter_cat)
@@ -349,7 +413,6 @@ def dashboard():
 def listar_protocolos():
     if 'user_email' not in session: return redirect('/showroom/')
     role = session.get('user_role', 'PUBLIC')
-    # Admin ou Vendas veem seus protocolos (ou todos no caso de Admin)
     if role == 'ADMINISTRATOR':
         protocolos = Protocolo.query.order_by(Protocolo.id.desc()).all()
     else:
@@ -364,7 +427,6 @@ def novo_protocolo():
     if request.method == 'POST':
         acao = request.form.get('acao')
 
-        # --- PREVIEW DO PROTOCOLO ---
         if acao == 'revisar':
             dados_cliente = {
                 'nome': request.form.get('cliente_nome'),
@@ -375,7 +437,6 @@ def novo_protocolo():
                 'endereco': request.form.get('cliente_endereco'),
                 'data_prevista': request.form.get('data_prevista')
             }
-            
             skus = request.form.getlist('item_sku[]')
             nomes = request.form.getlist('item_nome[]')
             qtds = request.form.getlist('item_qtd[]')
@@ -386,36 +447,23 @@ def novo_protocolo():
             for i in range(len(skus)):
                 if nomes[i].strip():
                     qtd_val = int(qtds[i])
-                    
-                    # 1. Tenta achar em Produto Showroom para pegar preço
                     prod = Produto.query.filter(
                         or_(Produto.sku_produtos == skus[i], Produto.nome == nomes[i]),
                         Produto.categoria_produtos.ilike('%showroom%')
                     ).first()
-
-                    # Se não, Amostras geralmente não têm preço unitário definido aqui, assume 0
-                    
                     preco = float(prod.valor_unitario) if (prod and prod.valor_unitario) else 0.0
                     subtotal = preco * qtd_val
                     total_geral += subtotal
-                    
                     itens_preview.append({
-                        "sku": skus[i], 
-                        "nome": nomes[i], 
-                        "qtd": qtd_val,
-                        "preco_unit": preco,
-                        "subtotal": subtotal
+                        "sku": skus[i], "nome": nomes[i], "qtd": qtd_val,
+                        "preco_unit": preco, "subtotal": subtotal
                     })
 
             return render_template('index.html', view_mode='novo_protocolo', 
-                                   user=session['user_email'], 
-                                   preview_mode=True,
-                                   dados_cliente=dados_cliente,
-                                   itens_preview=itens_preview,
-                                   total_geral=total_geral,
-                                   produtos_db=[]) 
+                                   user=session['user_email'], preview_mode=True,
+                                   dados_cliente=dados_cliente, itens_preview=itens_preview,
+                                   total_geral=total_geral, produtos_db=[]) 
 
-        # --- GRAVAR PROTOCOLO ---
         elif acao == 'confirmar':
             try:
                 data_prevista = datetime.strptime(request.form.get('data_prevista'), '%Y-%m-%d')
@@ -427,21 +475,15 @@ def novo_protocolo():
                 for i in range(len(skus)):
                     if nomes[i].strip():
                         qtd_val = int(qtds[i])
-                        
                         prod = Produto.query.filter(
                             or_(Produto.sku_produtos == skus[i], Produto.nome == nomes[i]),
                             Produto.categoria_produtos.ilike('%showroom%')
                         ).first()
-                        
                         preco_unit = float(prod.valor_unitario) if (prod and prod.valor_unitario) else 0.0
                         subtotal = preco_unit * qtd_val
-                        
                         itens_json.append({
-                            "sku": skus[i], 
-                            "nome": nomes[i], 
-                            "qtd": qtd_val,
-                            "preco_unit": preco_unit,
-                            "subtotal": subtotal
+                            "sku": skus[i], "nome": nomes[i], "qtd": qtd_val,
+                            "preco_unit": preco_unit, "subtotal": subtotal
                         })
                 
                 novo = Protocolo(
@@ -455,7 +497,6 @@ def novo_protocolo():
                     data_prevista_devolucao=data_prevista,
                     itens_json=itens_json
                 )
-                
                 db.session.add(novo)
                 
                 # --- PROCESSAR BAIXA/STATUS ---
@@ -464,7 +505,6 @@ def novo_protocolo():
                     nome = item.get('nome')
                     qtd_saida = int(item.get('qtd', 1))
 
-                    # 1. Tenta achar Amostra Única (Patrimônio)
                     amostra_db = None
                     if sku: amostra_db = Amostra.query.filter_by(sku_amostras=sku).first()
                     if not amostra_db and nome: amostra_db = Amostra.query.filter(Amostra.nome.ilike(nome)).first()
@@ -477,52 +517,38 @@ def novo_protocolo():
                         amostra_db.data_prevista_retorno = data_prevista
                         db.session.add(Log(tipo_item='amostra', item_id=amostra_db.id, acao='PROTOCOLO_SAIDA', usuario_nome=session['user_email']))
                     
-                    # 2. Se não for Amostra Única, DEVE ser Produto Showroom (Baixa Estoque)
                     elif not amostra_db:
                         prod_db = Produto.query.filter(
                             or_(Produto.sku_produtos == sku, Produto.nome == nome),
                             Produto.categoria_produtos.ilike('%showroom%')
                         ).first()
-                        
                         if prod_db:
                             prod_db.quantidade -= qtd_saida
                             db.session.add(Log(
-                                tipo_item='produto_showroom', 
-                                item_id=prod_db.id, 
-                                acao='SAIDA_PROTOCOLO', 
-                                quantidade=qtd_saida,
+                                tipo_item='produto_showroom', item_id=prod_db.id, 
+                                acao='SAIDA_PROTOCOLO', quantidade=qtd_saida,
                                 usuario_nome=session['user_email']
                             ))
-                        else:
-                            print(f"⚠️ AVISO: Item '{nome}' não encontrado nem como Amostra nem como Showroom.")
 
                 db.session.commit()
                 
-                # Gera e Envia
-                pdf_bytes = gerar_pdf_protocolo(novo)
-                enviar_email_protocolo(novo, pdf_bytes)
-                
-                return redirect('/showroom/protocolos')
+                # MUDANÇA: Redireciona para conferência em vez de finalizar direto
+                return redirect(f'/showroom/protocolo/detalhe/{novo.id}')
                 
             except Exception as e:
                 db.session.rollback()
                 print(f"Erro ao criar protocolo: {traceback.format_exc()}")
-                return f"Erro Crítico ao Gerar Protocolo: {e}"
+                return f"Erro Crítico: {e}"
 
-    # AUTOCOMPLETE (Carrega TUDO: Produtos Showroom + Amostras)
     todos_produtos = Produto.query.filter(Produto.categoria_produtos.ilike('%showroom%')).with_entities(Produto.sku_produtos, Produto.nome).all()
     todas_amostras = Amostra.query.with_entities(Amostra.sku_amostras, Amostra.nome).all()
     
     lista_final = []
     seen = set()
-    
-    # Adiciona produtos showroom
     for p in todos_produtos:
         if p.nome not in seen:
             lista_final.append({"sku": (p.sku_produtos or ""), "nome": p.nome})
             seen.add(p.nome)
-    
-    # Adiciona amostras
     for a in todas_amostras:
         if a.nome not in seen:
             lista_final.append({"sku": (a.sku_amostras or ""), "nome": a.nome})
@@ -530,86 +556,95 @@ def novo_protocolo():
 
     return render_template('index.html', view_mode='novo_protocolo', user=session['user_email'], produtos_db=lista_final)
 
+@app.route('/showroom/protocolo/detalhe/<int:id>', methods=['GET', 'POST'])
+def detalhe_protocolo(id):
+    if 'user_email' not in session: return redirect('/showroom/')
+    
+    protocolo = Protocolo.query.get_or_404(id)
+    msg = None
+    erro = None
+
+    if request.method == 'POST':
+        acao = request.form.get('acao')
+        
+        if acao == 'enviar_autentique':
+            # 1. Gera PDF
+            pdf_bytes = gerar_pdf_protocolo(protocolo)
+            
+            # 2. Envia Autentique
+            resultado = enviar_para_autentique(protocolo, pdf_bytes)
+            
+            if resultado.get('sucesso'):
+                msg = "✅ Documento enviado para o cliente via Autentique com sucesso!"
+                protocolo.status = 'AGUARDANDO_ASSINATURA'
+                db.session.commit()
+                # Opcional: Enviar cópia interna por email também
+                enviar_email_interno(protocolo, pdf_bytes)
+            else:
+                erro = f"❌ Erro Autentique: {resultado.get('erro')}"
+
+    return render_template('index.html', view_mode='detalhe_protocolo', p=protocolo, msg=msg, erro=erro, user=session['user_email'])
+
 @app.route('/showroom/protocolo/download/<int:id>')
 def download_protocolo(id):
     if 'user_email' not in session: return redirect('/showroom/')
-    
     try:
         protocolo = Protocolo.query.get_or_404(id)
         pdf_bytes = gerar_pdf_protocolo(protocolo)
-        
         response = make_response(pdf_bytes)
         response.headers['Content-Type'] = 'application/pdf'
         response.headers['Content-Disposition'] = f'attachment; filename=Protocolo_{protocolo.id}.pdf'
         return response
     except Exception as e:
-        print(f"Erro no Download PDF: {traceback.format_exc()}")
         return f"Erro interno ao gerar PDF: {str(e)}", 500
 
 @app.route('/showroom/acao/<tipo>/<int:id>', methods=['GET', 'POST'])
 def acao(tipo, id):
     if 'user_email' not in session: return redirect('/showroom/')
-    role = session.get('user_role', 'PUBLIC')
-    msg_sucesso = None
     item = None
+    msg_sucesso = None
 
     if tipo == 'produto':
-        # Aqui, por definição do novo escopo, TODO produto acessado deve ser Showroom
         item = Produto.query.get_or_404(id)
-        
-        # Confirma se é showroom para segurança
         if 'showroom' in (item.categoria_produtos or '').lower():
-            
-            # Truque para usar o template de Gestão visual (Protocolo/Venda/Baixa)
-            tipo_visualizacao = 'amostra' 
-            # Mapeia campos para não quebrar o HTML que espera campos de Amostra
+            # Hack de visualização
             item.sku_amostras = item.sku_produtos
             item.categoria_amostra = item.categoria_produtos
-            item.status = 'DISPONIVEL' # Para liberar os botões
+            item.status = 'DISPONIVEL'
             item.vendedor_responsavel = None
             item.codigo_patrimonio = None
 
             if request.method == 'POST':
                 acao_realizada = request.form.get('acao_amostra')
-                
                 if acao_realizada in ['vendido', 'fora_linha']:
                     if item.quantidade > 0:
                         item.quantidade -= 1
                         acao_log = 'WEB_BAIXA_VENDIDO' if acao_realizada == 'vendido' else 'WEB_BAIXA_FORA_LINHA'
                         db.session.add(Log(
-                            tipo_item='produto_showroom', 
-                            item_id=item.id, 
-                            acao=acao_log, 
-                            quantidade=1, 
-                            usuario_nome=session['user_email']
+                            tipo_item='produto_showroom', item_id=item.id, 
+                            acao=acao_log, quantidade=1, usuario_nome=session['user_email']
                         ))
                         db.session.commit()
                         msg_sucesso = "1 Unidade baixada do estoque de Showroom."
                     else:
                         msg_sucesso = "Erro: Sem estoque para baixar."
-
             return render_template('index.html', view_mode='acao', item=item, tipo='amostra', msg=msg_sucesso)
-        
         else:
             return "⛔ Acesso Negado: Este item não pertence ao Showroom."
 
     elif tipo == 'amostra':
         item = Amostra.query.get_or_404(id)
-        
         if request.method == 'POST':
             acao_realizada = request.form.get('acao_amostra')
-            
             if acao_realizada == 'devolver':
                 item.status = 'DISPONIVEL'
                 item.vendedor_responsavel = None
                 item.cliente_destino = None
                 db.session.add(Log(tipo_item='amostra', item_id=item.id, acao='WEB_DEVOLUCAO', usuario_nome=session['user_email']))
-            
             elif acao_realizada == 'vendido':
                 item.status = 'VENDIDO'
                 item.vendedor_responsavel = session['user_email'] 
                 db.session.add(Log(tipo_item='amostra', item_id=item.id, acao='WEB_VENDIDO', usuario_nome=session['user_email']))
-            
             elif acao_realizada == 'fora_linha':
                 item.status = 'FORA_DE_LINHA'
                 db.session.add(Log(tipo_item='amostra', item_id=item.id, acao='WEB_BAIXA', usuario_nome=session['user_email']))
