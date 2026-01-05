@@ -251,7 +251,7 @@ def enviar_para_autentique(protocolo, pdf_bytes):
         print("⚠️ Token Autentique não configurado.")
         return {"erro": "Token Autentique não encontrado no .env"}
 
-    # --- CORREÇÃO AQUI: Removido 'signed' e 'uploaded_at' que causavam erro ---
+    # --- QUERY CORRIGIDA (SEM CAMPO 'signed') ---
     operations = {
         "query": """
         mutation CreateDocumentMutation(
@@ -486,7 +486,12 @@ def novo_protocolo():
                             "preco_unit": preco_unit, "subtotal": subtotal
                         })
                 
+                # --- FORÇAR ID BASEADO NO ÚLTIMO DO BANCO ---
+                ultimo_p = Protocolo.query.order_by(Protocolo.id.desc()).first()
+                proximo_id = (ultimo_p.id + 1) if ultimo_p else 1
+
                 novo = Protocolo(
+                    id=proximo_id, # <--- ID FORÇADO AQUI
                     vendedor_email=session['user_email'],
                     cliente_nome=request.form.get('cliente_nome'),
                     cliente_empresa=request.form.get('cliente_empresa'),
