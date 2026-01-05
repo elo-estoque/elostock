@@ -55,7 +55,6 @@
         }
         .form-control::placeholder { color: #6c757d; }
         
-        /* Tenta forçar opções escuras no dropdown */
         option { background-color: var(--brand-card); color: white; }
 
         .input-group-text {
@@ -316,6 +315,61 @@
         </div>
     </div>
 
+    {% elif view_mode == 'detalhe_protocolo' %}
+    <nav class="navbar navbar-dark bg-dark mb-4">
+        <div class="container">
+            <span class="navbar-brand fw-bold">Conferência Protocolo #{{ p.id }}</span>
+            <a href="/showroom/protocolos" class="btn btn-outline-secondary btn-sm">Listar Protocolos</a>
+        </div>
+    </nav>
+
+    <div class="container d-flex justify-content-center">
+        <div class="content-box text-center" style="max-width: 600px; width: 100%;">
+            
+            <h4 class="text-white fw-bold mb-1">Verificar & Assinar</h4>
+            <p class="text-muted mb-4">Cliente: <span class="text-white">{{ p.cliente_empresa }}</span> ({{ p.cliente_nome }})</p>
+
+            {% if msg %}
+                <div class="alert alert-success border-success bg-success bg-opacity-25 text-white mb-4">
+                    <i class="bi bi-check-circle-fill me-2"></i> {{ msg }}
+                </div>
+                <a href="/showroom/dashboard" class="btn btn-outline-light w-100">Voltar ao Painel</a>
+            {% elif erro %}
+                <div class="alert alert-danger border-danger bg-danger bg-opacity-25 text-white mb-4">
+                    <i class="bi bi-exclamation-triangle-fill me-2"></i> {{ erro }}
+                </div>
+            {% endif %}
+
+            {% if not msg %}
+            <div class="card bg-dark border-secondary mb-4 text-start">
+                <div class="card-body p-4">
+                    <h6 class="text-muted text-uppercase small mb-3 border-bottom border-secondary pb-2">Passo 1: Conferência Visual</h6>
+                    <p class="small text-muted mb-3">Antes de enviar para o cliente, verifique se todos os dados no PDF estão corretos.</p>
+                    
+                    <a href="/showroom/protocolo/download/{{ p.id }}" target="_blank" class="btn btn-outline-light w-100">
+                        <i class="bi bi-file-earmark-pdf me-2"></i> Baixar/Visualizar PDF
+                    </a>
+                </div>
+            </div>
+
+            <div class="card bg-dark border-secondary text-start">
+                <div class="card-body p-4">
+                    <h6 class="text-muted text-uppercase small mb-3 border-bottom border-secondary pb-2">Passo 2: Assinatura Digital</h6>
+                    <p class="small text-muted mb-3">Ao confirmar, o Autentique enviará um e-mail para <strong>{{ p.cliente_email }}</strong> solicitando a assinatura.</p>
+                    
+                    <form method="POST">
+                        <input type="hidden" name="acao" value="enviar_autentique">
+                        <button type="submit" class="btn btn-primary w-100 py-3 fw-bold fs-6">
+                            <i class="bi bi-pen-fill me-2"></i> ENVIAR VIA AUTENTIQUE
+                        </button>
+                    </form>
+                </div>
+            </div>
+            {% endif %}
+
+        </div>
+    </div>
+
     {% elif view_mode == 'protocolos' %}
     <nav class="navbar navbar-dark bg-dark mb-4">
         <div class="container">
@@ -351,11 +405,17 @@
                                 <td>{{ p.cliente_empresa }}</td>
                                 <td>{{ p.data_criacao.strftime('%d/%m/%Y') }}</td>
                                 <td>
-                                    {% if p.status == 'ABERTO' %}<span class="badge bg-warning text-dark">Em Aberto</span>
-                                    {% else %}<span class="badge bg-success">Concluído</span>{% endif %}
+                                    {% if p.status == 'ABERTO' %}
+                                        <span class="badge bg-warning text-dark">Em Aberto</span>
+                                    {% elif p.status == 'AGUARDANDO_ASSINATURA' %}
+                                        <span class="badge bg-info text-dark">Assinatura Pendente</span>
+                                    {% else %}
+                                        <span class="badge bg-success">Concluído</span>
+                                    {% endif %}
                                 </td>
                                 <td class="text-end">
-                                    <a href="/showroom/protocolo/download/{{ p.id }}" class="btn btn-sm btn-outline-light"><i class="bi bi-download"></i> PDF</a>
+                                    <a href="/showroom/protocolo/detalhe/{{ p.id }}" class="btn btn-sm btn-outline-info me-1"><i class="bi bi-eye"></i></a>
+                                    <a href="/showroom/protocolo/download/{{ p.id }}" class="btn btn-sm btn-outline-light"><i class="bi bi-download"></i></a>
                                 </td>
                             </tr>
                             {% endfor %}
@@ -431,7 +491,7 @@
                         </div>
 
                         <div class="d-grid gap-2 mt-5">
-                            <button type="submit" name="acao" value="confirmar" class="btn btn-primary fw-bold py-2">GERAR PROTOCOLO & ENVIAR EMAIL</button>
+                            <button type="submit" name="acao" value="confirmar" class="btn btn-primary fw-bold py-2">GERAR PROTOCOLO & CONFERIR</button>
                             <a href="/showroom/protocolos" class="btn btn-outline-dark">Cancelar</a>
                         </div>
                     </form>
@@ -442,8 +502,6 @@
     
     <script>
         const produtosData = {{ produtos_db | tojson }};
-
-        // Captura parametros de URL para pre-preencher (Vindo do botão "Gerar Protocolo")
         const urlParams = new URLSearchParams(window.location.search);
         const preSku = urlParams.get('item_sku') || '';
         const preNome = urlParams.get('item_nome') || '';
@@ -490,7 +548,6 @@
         }
 
         document.addEventListener("DOMContentLoaded", function() {
-            // Se veio com parametros, adiciona preenchido, senão adiciona vazio
             if(preNome || preSku) {
                 addRow(preSku, preNome);
             } else {
