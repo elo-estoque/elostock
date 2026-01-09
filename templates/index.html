@@ -574,6 +574,17 @@
 
                     <form method="POST">
                         <div class="row g-3">
+
+                            <h6 class="text-muted text-uppercase small mt-2">Seus Dados (Vendedor)</h6>
+                            <div class="col-md-6">
+                                <label class="form-label small">Seu Nome Completo</label>
+                                <input type="text" name="vendedor_nome" class="form-control" placeholder="Ex: Maria Silva" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small">Seu WhatsApp</label>
+                                <input type="text" name="vendedor_telefone" class="form-control" placeholder="Ex: (11) 99999-9999" required>
+                            </div>
+
                             <h6 class="text-muted text-uppercase small mt-4">Dados da Empresa / Cliente</h6>
                             <div class="col-md-6">
                                 <label class="form-label small">CNPJ (Busca Automática)</label>
@@ -587,7 +598,12 @@
                                 <label class="form-label small">Razão Social / Empresa</label>
                                 <input type="text" name="cliente_empresa" id="inputEmpresa" class="form-control" required>
                             </div>
-                            
+
+                            <div class="col-md-6">
+                                <label class="form-label small">Inscrição Estadual</label>
+                                <input type="text" name="endereco_ie" id="inputIe" class="form-control" placeholder="Se houver">
+                            </div>
+
                             <div class="col-md-6">
                                 <label class="form-label small">Nome Contato</label>
                                 <input type="text" name="cliente_nome" class="form-control" required>
@@ -598,10 +614,10 @@
                             </div>
 
                             <div class="col-md-6">
-                                <label class="form-label small">Telefone</label>
+                                <label class="form-label small">Telefone Cliente</label>
                                 <input type="text" name="cliente_telefone" class="form-control">
                             </div>
-                            <div class="col-md-6">
+                            <div class="col-md-12">
                                 <label class="form-label small">E-mail do Cliente</label>
                                 <input type="email" name="cliente_email" class="form-control" required>
                             </div>
@@ -715,6 +731,12 @@
                     document.getElementById('inputBairro').value = data.bairro;
                     document.getElementById('inputCidade').value = data.municipio;
                     document.getElementById('inputUf').value = data.uf;
+                    
+                    // TENTA PREENCHER A IE SE A API RETORNAR (GERALMENTE NÃO RETORNA NA BRASILAPI PADRÃO)
+                    // MAS O CAMPO ESTÁ LÁ PARA SER PREENCHIDO MANUALMENTE SE NECESSÁRIO
+                    if(data.inscricao_estadual) {
+                        document.getElementById('inputIe').value = data.inscricao_estadual;
+                    }
                 })
                 .catch(err => {
                     statusMsg.innerText = "Erro ao buscar CNPJ.";
