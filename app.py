@@ -43,6 +43,8 @@ db = SQLAlchemy(app)
 DIRECTUS_URL = os.environ.get("DIRECTUS_URL")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
+# Token opcional para o CNPJa (se tiver, coloque no .env, senão ele tenta sem)
+CNPJA_TOKEN = os.environ.get("CNPJA_TOKEN")
 
 # --- CONFIGURAÇÃO AUTENTIQUE ---
 AUTENTIQUE_TOKEN = os.environ.get("AUTENTIQUE_TOKEN")
@@ -108,13 +110,12 @@ class Protocolo(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     vendedor_email = db.Column(db.String(150))
     
-    # Dados do Cliente (Separados conforme solicitado)
+    # Dados do Cliente
     cliente_nome = db.Column(db.String(150)) # Nome
     cliente_sobrenome = db.Column(db.String(150)) # Sobrenome
     cliente_empresa = db.Column(db.String(150)) # Razão Social
     cliente_cnpj = db.Column(db.String(50))
-    # NOVO CAMPO: INSCRIÇÃO ESTADUAL
-    endereco_ie = db.Column(db.String(50)) 
+    endereco_ie = db.Column(db.String(50)) # IE
     
     cliente_email = db.Column(db.String(150))
     cliente_telefone = db.Column(db.String(50))
@@ -126,15 +127,15 @@ class Protocolo(db.Model):
     endereco_bairro = db.Column(db.String(100))
     endereco_cidade = db.Column(db.String(100))
     endereco_uf = db.Column(db.String(5))
-    cliente_endereco = db.Column(db.Text) # Mantido para compatibilidade, concatenação dos acima
+    cliente_endereco = db.Column(db.Text) 
     
     # Rastreio e Envio
     transportadora = db.Column(db.String(100))
     rastreio = db.Column(db.String(100))
     entregador_nome = db.Column(db.String(100))
-    data_envio = db.Column(db.DateTime) # Nova Data de Envio
+    data_envio = db.Column(db.DateTime)
     
-    # Dados do Vendedor (Armazenados localmente para PDF)
+    # Dados do Vendedor
     vendedor_nome = db.Column(db.String(150))
     vendedor_telefone = db.Column(db.String(50))
 
@@ -162,11 +163,10 @@ def gerar_pdf_protocolo(protocolo):
     elements.append(Paragraph(f"PROTOCOLO DE AMOSTRA <b>#{protocolo.id}</b>", styles['Heading2']))
     elements.append(Spacer(1, 0.5 * cm))
     
-    # Dados de Datas e Vendedor
+    # Datas
     d_envio = protocolo.data_envio.strftime('%d/%m/%Y') if protocolo.data_envio else (protocolo.data_criacao.strftime('%d/%m/%Y') if protocolo.data_criacao else '--/--/----')
     d_dev = protocolo.data_prevista_devolucao.strftime('%d/%m/%Y') if protocolo.data_prevista_devolucao else '--/--/----'
     
-    # Usa os dados do vendedor salvos no protocolo, ou fallback para sessão/email
     vendedor_txt = f"{protocolo.vendedor_nome} | {protocolo.vendedor_telefone}" if protocolo.vendedor_nome else f"{protocolo.vendedor_email}"
     
     dados_topo = [
@@ -188,14 +188,14 @@ def gerar_pdf_protocolo(protocolo):
     
     endereco_completo = f"{protocolo.endereco_rua or ''}, {protocolo.endereco_numero or ''} - {protocolo.endereco_bairro or ''}, {protocolo.endereco_cidade or ''}/{protocolo.endereco_uf or ''} - CEP: {protocolo.endereco_cep or ''}"
     if not protocolo.endereco_rua:
-        endereco_completo = protocolo.cliente_endereco # Fallback antigo
+        endereco_completo = protocolo.cliente_endereco 
         
     nome_completo = f"{protocolo.cliente_nome} {protocolo.cliente_sobrenome or ''}"
 
     dados_cliente = [
         ["Empresa:", protocolo.cliente_empresa or ''],
         ["CNPJ:", protocolo.cliente_cnpj or ''],
-        ["Inscr. Estadual:", protocolo.endereco_ie or 'ISENTO'],  # ADICIONADO NO PDF
+        ["Inscr. Estadual:", protocolo.endereco_ie or 'ISENTO'],
         ["Contato:", nome_completo],
         ["Email:", protocolo.cliente_email or ''],
         ["Telefone:", protocolo.cliente_telefone or ''],
@@ -209,7 +209,7 @@ def gerar_pdf_protocolo(protocolo):
     ]))
     elements.append(t_cliente)
     
-    # Dados de Envio/Rastreio
+    # Envio/Rastreio
     if protocolo.transportadora or protocolo.entregador_nome:
         elements.append(Spacer(1, 0.2 * cm))
         dados_envio = [
@@ -226,10 +226,9 @@ def gerar_pdf_protocolo(protocolo):
 
     elements.append(Spacer(1, 0.5 * cm))
 
-    # Itens (SEM SKU, conforme pedido)
+    # Itens
     elements.append(Paragraph("<b>ITENS SOLICITADOS</b>", styles['Heading4']))
     
-    # Removida coluna SKU do cabeçalho
     data_itens = [['PRODUTO / DESCRIÇÃO', 'QTD', 'UNIT.', 'TOTAL']]
     total_protocolo = 0.0
     
@@ -238,16 +237,12 @@ def gerar_pdf_protocolo(protocolo):
             try:
                 nome_txt = str(item.get('nome') or 'Item sem nome')
                 qtd_txt = str(item.get('qtd') or '1')
-                
                 raw_unit = item.get('preco_unit')
                 raw_total = item.get('subtotal')
-                
                 val_unit = float(raw_unit) if raw_unit is not None else 0.0
                 val_total = float(raw_total) if raw_total is not None else 0.0
-                
                 total_protocolo += val_total
                 
-                # Removido SKU da linha
                 data_itens.append([
                     nome_txt,
                     qtd_txt,
@@ -258,16 +253,14 @@ def gerar_pdf_protocolo(protocolo):
                 print(f"Erro processando item PDF: {e}")
                 data_itens.append(["Erro nos dados do item", "0", "0.00", "0.00"])
             
-    # Total Geral (Ajuste de colunas pois removemos uma)
     data_itens.append(['', '', 'TOTAL:', f"R$ {total_protocolo:.2f}"])
     
-    # Ajuste colWidths para preencher a página sem a coluna SKU
     t_itens = Table(data_itens, colWidths=[11.5*cm, 2*cm, 2.5*cm, 2.5*cm])
     t_itens.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.darkred),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('ALIGN', (0, 0), (0, -1), 'LEFT'), # Nome alinhado a esquerda
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'), 
         ('ALIGN', (2, 1), (-1, -1), 'RIGHT'), 
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), 
         ('FONTNAME', (-2, -1), (-1, -1), 'Helvetica-Bold'),
@@ -298,7 +291,6 @@ def gerar_pdf_protocolo(protocolo):
     return buffer.getvalue()
 
 def enviar_para_autentique(protocolo, pdf_bytes):
-    """ Envia o PDF para o Autentique via GraphQL """
     if not AUTENTIQUE_TOKEN:
         print("⚠️ Token Autentique não configurado.")
         return {"erro": "Token Autentique não encontrado no .env"}
@@ -337,11 +329,7 @@ def enviar_para_autentique(protocolo, pdf_bytes):
     }
 
     map_data = {"0": ["variables.file"]}
-    
-    files = {
-        "0": (f"protocolo_{protocolo.id}.pdf", pdf_bytes, "application/pdf")
-    }
-
+    files = {"0": (f"protocolo_{protocolo.id}.pdf", pdf_bytes, "application/pdf")}
     headers = {"Authorization": f"Bearer {AUTENTIQUE_TOKEN}"}
 
     try:
@@ -352,31 +340,24 @@ def enviar_para_autentique(protocolo, pdf_bytes):
             headers=headers
         )
         resp_json = response.json()
-        
         if "errors" in resp_json:
             return {"erro": resp_json['errors'][0]['message']}
-            
         return {"sucesso": True, "data": resp_json['data']['createDocument']}
     except Exception as e:
         return {"erro": str(e)}
 
 def enviar_email_interno(protocolo, pdf_bytes):
-    """ Envia cópia apenas para o vendedor/chefe se necessário (Fallback) """
     if not SMTP_USER or not SMTP_PASS: return
-
     try:
         msg = MIMEMultipart()
         msg['From'] = SMTP_USER
         msg['To'] = f"{protocolo.vendedor_email}, {EMAIL_CHEFE}"
         msg['Subject'] = f"Cópia Interna: Protocolo #{protocolo.id} - {protocolo.cliente_empresa}"
-
         body = f"Protocolo #{protocolo.id} gerado.\nCliente: {protocolo.cliente_nome}\n\nEste documento foi/será enviado via Autentique."
         msg.attach(MIMEText(body, 'plain'))
-
         part = MIMEApplication(pdf_bytes, Name=f"Protocolo_{protocolo.id}.pdf")
         part['Content-Disposition'] = f'attachment; filename="Protocolo_{protocolo.id}.pdf"'
         msg.attach(part)
-
         server = smtplib.SMTP(SMTP_SERVER, int(SMTP_PORT))
         server.starttls()
         server.login(SMTP_USER, SMTP_PASS)
@@ -405,9 +386,7 @@ def index():
                     data = user_info.json().get('data', {})
                     role_name = data.get('role', {}).get('name', 'Public') if data.get('role') else 'Public'
                     session['user_role'] = role_name.upper()
-                    # Salva dados extras se existirem
                     session['user_name'] = f"{data.get('first_name','')} {data.get('last_name','')}"
-                    # Assumindo que o campo 'title' ou outro campo custom seja o whatsapp
                     session['user_phone'] = data.get('title', '') 
                 else:
                     session['user_role'] = 'PUBLIC'
@@ -418,6 +397,64 @@ def index():
     if 'user_email' in session: return redirect('/showroom/dashboard')
     return render_template('index.html', view_mode='login')
 
+# --- NOVA ROTA API INTERNA (PROXY DE CNPJ) ---
+@app.route('/showroom/api/consulta_cnpj/<cnpj>')
+def consulta_cnpj_proxy(cnpj):
+    if 'user_email' not in session: return jsonify({'erro': 'Acesso negado'}), 403
+    
+    cnpj_limpo = ''.join(filter(str.isdigit, cnpj))
+    dados_finais = {}
+
+    # 1. Tenta BrasilAPI (Gratuita, Rápida)
+    try:
+        resp = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj_limpo}", timeout=5)
+        if resp.status_code == 200:
+            dados_finais = resp.json()
+    except Exception as e:
+        print(f"Erro BrasilAPI: {e}")
+
+    # 2. Se BrasilAPI falhou ou não trouxe IE, tenta CNPJa (Backup)
+    ie_encontrada = dados_finais.get('inscricao_estadual')
+    
+    if not ie_encontrada: 
+        try:
+            # Tenta endpoint público da CNPJa (sujeito a limites) ou com Token se configurado
+            headers = {}
+            if CNPJA_TOKEN:
+                headers = {'Authorization': CNPJA_TOKEN}
+            
+            resp_cnpja = requests.get(f"https://api.cnpja.com/office/{cnpj_limpo}", headers=headers, timeout=5)
+            
+            if resp_cnpja.status_code == 200:
+                dados_cnpja = resp_cnpja.json()
+                
+                # Se BrasilAPI falhou totalmente, usa dados do CNPJa
+                if not dados_finais:
+                    dados_finais = {
+                        'razao_social': dados_cnpja.get('name'),
+                        'nome_fantasia': dados_cnpja.get('alias'),
+                        'logradouro': dados_cnpja.get('address', {}).get('street'),
+                        'numero': dados_cnpja.get('address', {}).get('number'),
+                        'bairro': dados_cnpja.get('address', {}).get('district'),
+                        'municipio': dados_cnpja.get('address', {}).get('city'),
+                        'uf': dados_cnpja.get('address', {}).get('state'),
+                        'cep': dados_cnpja.get('address', {}).get('zip')
+                    }
+                
+                # Tenta extrair IE do CNPJa (geralmente vem em 'registrations' ou direto)
+                if 'registrations' in dados_cnpja and len(dados_cnpja['registrations']) > 0:
+                     dados_finais['inscricao_estadual'] = dados_cnpja['registrations'][0].get('number')
+                elif 'inscricao_estadual' in dados_cnpja:
+                     dados_finais['inscricao_estadual'] = dados_cnpja['inscricao_estadual']
+
+        except Exception as e:
+            print(f"Erro CNPJa: {e}")
+
+    if dados_finais:
+        return jsonify(dados_finais)
+    else:
+        return jsonify({'erro': 'CNPJ não encontrado'}), 404
+
 @app.route('/showroom/dashboard')
 def dashboard():
     if 'user_email' not in session: return redirect('/showroom/')
@@ -426,16 +463,10 @@ def dashboard():
     filter_cat = request.args.get('cat', '').strip()
     filter_sub = request.args.get('sub', '').strip() 
 
-    # --- MÉTRICAS GERAIS ---
-    # Quantidade total de peças em estoque
     total_estoque = db.session.query(func.sum(Produto.quantidade)).scalar() or 0
-    # Valor total do inventário (Qtd * Valor Unitário)
     valor_estoque = db.session.query(func.sum(Produto.quantidade * Produto.valor_unitario)).scalar() or 0
-    # Mix / Ticket Médio
     ticket_medio = (valor_estoque / total_estoque) if total_estoque > 0 else 0
     
-    # Histórico Diário (Últimos logs agrupados por dia)
-    # Exemplo simples de contagem de movimentações hoje
     hoje = datetime.now().date()
     movimentacoes_hoje = Log.query.filter(func.date(Log.data_evento) == hoje).count()
 
@@ -497,21 +528,18 @@ def novo_protocolo():
     if request.method == 'POST':
         acao = request.form.get('acao')
         
-        # Recupera dados do form
         cliente_dados = {
             'nome': request.form.get('cliente_nome'),
             'sobrenome': request.form.get('cliente_sobrenome'),
             'empresa': request.form.get('cliente_empresa'),
             'cnpj': request.form.get('cliente_cnpj'),
-            'ie': request.form.get('endereco_ie'), # IE ADICIONADA AQUI
+            'ie': request.form.get('endereco_ie'), 
             'email': request.form.get('cliente_email'),
             'telefone': request.form.get('cliente_telefone'),
             
-            # Dados do Vendedor (do form)
             'vendedor_nome': request.form.get('vendedor_nome'),
             'vendedor_telefone': request.form.get('vendedor_telefone'),
 
-            # Endereço Separado
             'cep': request.form.get('endereco_cep'),
             'rua': request.form.get('endereco_rua'),
             'numero': request.form.get('endereco_numero'),
@@ -525,7 +553,6 @@ def novo_protocolo():
             'entregador': request.form.get('entregador')
         }
 
-        # Constrói endereço completo p/ compatibilidade
         endereco_str = f"{cliente_dados['rua']}, {cliente_dados['numero']} - {cliente_dados['bairro']}, {cliente_dados['cidade']}/{cliente_dados['uf']} - CEP: {cliente_dados['cep']}"
 
         skus = request.form.getlist('item_sku[]')
@@ -533,7 +560,6 @@ def novo_protocolo():
         qtds = request.form.getlist('item_qtd[]')
 
         itens_processados = []
-        total_geral = 0.0
         erros_validacao = []
 
         for i in range(len(skus)):
@@ -544,12 +570,10 @@ def novo_protocolo():
                     Produto.categoria_produtos.ilike('%showroom%')
                 ).first()
 
-                # --- VALIDAÇÃO DE ESTOQUE ---
                 if acao == 'confirmar' and prod:
                     if prod.quantidade < qtd_val:
                         erros_validacao.append(f"Produto '{prod.nome}' só tem {prod.quantidade} unidades em estoque (solicitado: {qtd_val}).")
                 
-                # Validação Amostra Única
                 amostra = Amostra.query.filter(
                     or_(Amostra.sku_amostras == skus[i], Amostra.nome == nomes[i])
                 ).first()
@@ -559,7 +583,6 @@ def novo_protocolo():
 
                 preco = float(prod.valor_unitario) if (prod and prod.valor_unitario) else 0.0
                 subtotal = preco * qtd_val
-                total_geral += subtotal
                 itens_processados.append({
                     "sku": skus[i], "nome": nomes[i], "qtd": qtd_val,
                     "preco_unit": preco, "subtotal": subtotal
@@ -569,12 +592,10 @@ def novo_protocolo():
             return render_template('index.html', view_mode='novo_protocolo', 
                                    user=session['user_email'], preview_mode=True,
                                    dados_cliente=cliente_dados, itens_preview=itens_processados,
-                                   total_geral=total_geral, produtos_db=[]) 
+                                   total_geral=0, produtos_db=[]) 
 
         elif acao == 'confirmar':
             if erros_validacao:
-                # Se houver erro, volta para a tela com mensagem
-                # Aqui simplificamos retornando a lista de produtos novamente para não quebrar a view
                 todos_produtos = Produto.query.filter(Produto.categoria_produtos.ilike('%showroom%')).with_entities(Produto.sku_produtos, Produto.nome).all()
                 lista_final = [{"sku": (p.sku_produtos or ""), "nome": p.nome} for p in todos_produtos]
                 return render_template('index.html', view_mode='novo_protocolo', 
@@ -592,7 +613,6 @@ def novo_protocolo():
                     id=proximo_id,
                     vendedor_email=session['user_email'],
                     
-                    # Vendedor (Do Form)
                     vendedor_nome=cliente_dados['vendedor_nome'],
                     vendedor_telefone=cliente_dados['vendedor_telefone'],
 
@@ -600,11 +620,10 @@ def novo_protocolo():
                     cliente_sobrenome=cliente_dados['sobrenome'],
                     cliente_empresa=cliente_dados['empresa'],
                     cliente_cnpj=cliente_dados['cnpj'],
-                    endereco_ie=cliente_dados['ie'], # SALVA NO BANCO
+                    endereco_ie=cliente_dados['ie'], 
                     cliente_email=cliente_dados['email'],
                     cliente_telefone=cliente_dados['telefone'],
                     
-                    # Endereço
                     endereco_cep=cliente_dados['cep'],
                     endereco_rua=cliente_dados['rua'],
                     endereco_numero=cliente_dados['numero'],
@@ -613,7 +632,6 @@ def novo_protocolo():
                     endereco_uf=cliente_dados['uf'],
                     cliente_endereco=endereco_str,
                     
-                    # Envio
                     transportadora=cliente_dados['transportadora'],
                     rastreio=cliente_dados['rastreio'],
                     entregador_nome=cliente_dados['entregador'],
@@ -624,7 +642,6 @@ def novo_protocolo():
                 )
                 db.session.add(novo)
                 
-                # --- PROCESSAR BAIXA/STATUS ---
                 for item in itens_processados:
                     sku = item.get('sku')
                     nome = item.get('nome')
@@ -664,18 +681,7 @@ def novo_protocolo():
                 return f"Erro Crítico: {e}"
 
     todos_produtos = Produto.query.filter(Produto.categoria_produtos.ilike('%showroom%')).with_entities(Produto.sku_produtos, Produto.nome).all()
-    todas_amostras = Amostra.query.with_entities(Amostra.sku_amostras, Amostra.nome).all()
-    
-    lista_final = []
-    seen = set()
-    for p in todos_produtos:
-        if p.nome not in seen:
-            lista_final.append({"sku": (p.sku_produtos or ""), "nome": p.nome})
-            seen.add(p.nome)
-    for a in todas_amostras:
-        if a.nome not in seen:
-            lista_final.append({"sku": (a.sku_amostras or ""), "nome": a.nome})
-            seen.add(a.nome)
+    lista_final = [{"sku": (p.sku_produtos or ""), "nome": p.nome} for p in todos_produtos]
 
     return render_template('index.html', view_mode='novo_protocolo', user=session['user_email'], produtos_db=lista_final)
 
@@ -755,7 +761,6 @@ def acao(tipo, id):
         if request.method == 'POST':
             acao_realizada = request.form.get('acao_amostra')
             if acao_realizada == 'devolver':
-                # Validação Simples (checkbox no front deve ser marcado)
                 item.status = 'DISPONIVEL'
                 item.vendedor_responsavel = None
                 item.cliente_destino = None
