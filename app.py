@@ -43,8 +43,6 @@ db = SQLAlchemy(app)
 DIRECTUS_URL = os.environ.get("DIRECTUS_URL")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
-# Token opcional para o CNPJa (se tiver, coloque no .env, senão ele tenta sem)
-CNPJA_TOKEN = os.environ.get("CNPJA_TOKEN")
 
 # --- CONFIGURAÇÃO AUTENTIQUE ---
 AUTENTIQUE_TOKEN = os.environ.get("AUTENTIQUE_TOKEN")
@@ -111,11 +109,11 @@ class Protocolo(db.Model):
     vendedor_email = db.Column(db.String(150))
     
     # Dados do Cliente
-    cliente_nome = db.Column(db.String(150)) # Nome
-    cliente_sobrenome = db.Column(db.String(150)) # Sobrenome
-    cliente_empresa = db.Column(db.String(150)) # Razão Social
+    cliente_nome = db.Column(db.String(150))
+    cliente_sobrenome = db.Column(db.String(150))
+    cliente_empresa = db.Column(db.String(150))
     cliente_cnpj = db.Column(db.String(50))
-    endereco_ie = db.Column(db.String(50)) # IE
+    endereco_ie = db.Column(db.String(50)) 
     
     cliente_email = db.Column(db.String(150))
     cliente_telefone = db.Column(db.String(50))
@@ -397,7 +395,7 @@ def index():
     if 'user_email' in session: return redirect('/showroom/dashboard')
     return render_template('index.html', view_mode='login')
 
-# --- NOVA ROTA API INTERNA (PROXY DE CNPJ) ---
+# --- NOVA ROTA API INTERNA (PROXY COM FALLBACK CNPJa) ---
 @app.route('/showroom/api/consulta_cnpj/<cnpj>')
 def consulta_cnpj_proxy(cnpj):
     if 'user_email' not in session: return jsonify({'erro': 'Acesso negado'}), 403
@@ -405,7 +403,7 @@ def consulta_cnpj_proxy(cnpj):
     cnpj_limpo = ''.join(filter(str.isdigit, cnpj))
     dados_finais = {}
 
-    # 1. Tenta BrasilAPI (Gratuita, Rápida)
+    # 1. Tenta BrasilAPI (Dados básicos da Receita)
     try:
         resp = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj_limpo}", timeout=5)
         if resp.status_code == 200:
@@ -413,22 +411,19 @@ def consulta_cnpj_proxy(cnpj):
     except Exception as e:
         print(f"Erro BrasilAPI: {e}")
 
-    # 2. Se BrasilAPI falhou ou não trouxe IE, tenta CNPJa (Backup)
+    # 2. Tenta CNPJá Open API (Para pegar IE se faltar)
     ie_encontrada = dados_finais.get('inscricao_estadual')
     
     if not ie_encontrada: 
         try:
-            # Tenta endpoint público da CNPJa (sujeito a limites) ou com Token se configurado
-            headers = {}
-            if CNPJA_TOKEN:
-                headers = {'Authorization': CNPJA_TOKEN}
-            
-            resp_cnpja = requests.get(f"https://api.cnpja.com/office/{cnpj_limpo}", headers=headers, timeout=5)
+            # Endpoint público gratuito do CNPJa: /office/{cnpj}
+            # Referência: https://cnpja.com/api/open
+            resp_cnpja = requests.get(f"https://cnpja.com/api/v1/office/{cnpj_limpo}", timeout=6)
             
             if resp_cnpja.status_code == 200:
                 dados_cnpja = resp_cnpja.json()
                 
-                # Se BrasilAPI falhou totalmente, usa dados do CNPJa
+                # Se BrasilAPI falhou, usa dados cadastrais do CNPJa
                 if not dados_finais:
                     dados_finais = {
                         'razao_social': dados_cnpja.get('name'),
@@ -441,9 +436,15 @@ def consulta_cnpj_proxy(cnpj):
                         'cep': dados_cnpja.get('address', {}).get('zip')
                     }
                 
-                # Tenta extrair IE do CNPJa (geralmente vem em 'registrations' ou direto)
-                if 'registrations' in dados_cnpja and len(dados_cnpja['registrations']) > 0:
-                     dados_finais['inscricao_estadual'] = dados_cnpja['registrations'][0].get('number')
+                # Tenta extrair Inscrição Estadual do array 'registrations' (Padrão CNPJa)
+                registros = dados_cnpja.get('registrations', [])
+                if registros:
+                    for reg in registros:
+                        if reg.get('type') == 'State' and reg.get('number'):
+                            dados_finais['inscricao_estadual'] = reg.get('number')
+                            break # Pega a primeira IE válida
+                
+                # Fallback antigo se vier direto no objeto (raro na v1)
                 elif 'inscricao_estadual' in dados_cnpja:
                      dados_finais['inscricao_estadual'] = dados_cnpja['inscricao_estadual']
 
