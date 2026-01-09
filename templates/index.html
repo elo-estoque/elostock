@@ -600,7 +600,11 @@
                             </div>
 
                             <div class="col-md-6">
-                                <label class="form-label small">Inscrição Estadual</label>
+                                <label class="form-label small">Inscrição Estadual 
+                                    <a href="http://www.sintegra.gov.br/" target="_blank" class="text-decoration-none ms-2" style="font-size: 0.75rem; color: var(--brand-wine);">
+                                        <i class="bi bi-box-arrow-up-right"></i> Consultar Sintegra
+                                    </a>
+                                </label>
                                 <input type="text" name="endereco_ie" id="inputIe" class="form-control" placeholder="Se houver">
                             </div>
 
@@ -707,15 +711,19 @@
         const preSku = urlParams.get('item_sku') || '';
         const preNome = urlParams.get('item_nome') || '';
 
-        // FUNÇÃO DE BUSCA CNPJ
+        // FUNÇÃO DE BUSCA CNPJ (ATUALIZADA PARA USAR O PROXY INTERNO)
         function buscarCnpj(cnpj) {
             cnpj = cnpj.replace(/\D/g, '');
             if(cnpj.length !== 14) return;
             
+            // LIMPA IE ANTES DE BUSCAR
+            document.getElementById('inputIe').value = '';
+
             const statusMsg = document.getElementById('statusCnpj');
             statusMsg.innerText = "Buscando dados...";
             
-            fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`)
+            // CHAMA A NOVA ROTA DO BACKEND
+            fetch(`/showroom/api/consulta_cnpj/${cnpj}`)
                 .then(response => {
                     if(!response.ok) throw new Error("CNPJ não encontrado");
                     return response.json();
@@ -724,16 +732,15 @@
                     statusMsg.innerText = "Empresa encontrada!";
                     statusMsg.className = "text-success small";
                     
-                    document.getElementById('inputEmpresa').value = data.razao_social;
-                    document.getElementById('inputCep').value = data.cep;
-                    document.getElementById('inputLogradouro').value = data.logradouro;
-                    document.getElementById('inputNumero').value = data.numero;
-                    document.getElementById('inputBairro').value = data.bairro;
-                    document.getElementById('inputCidade').value = data.municipio;
-                    document.getElementById('inputUf').value = data.uf;
+                    document.getElementById('inputEmpresa').value = data.razao_social || '';
+                    document.getElementById('inputCep').value = data.cep || '';
+                    document.getElementById('inputLogradouro').value = data.logradouro || '';
+                    document.getElementById('inputNumero').value = data.numero || '';
+                    document.getElementById('inputBairro').value = data.bairro || '';
+                    document.getElementById('inputCidade').value = data.municipio || '';
+                    document.getElementById('inputUf').value = data.uf || '';
                     
-                    // TENTA PREENCHER A IE SE A API RETORNAR (GERALMENTE NÃO RETORNA NA BRASILAPI PADRÃO)
-                    // MAS O CAMPO ESTÁ LÁ PARA SER PREENCHIDO MANUALMENTE SE NECESSÁRIO
+                    // PREENCHE A IE SE VIER DO BACKEND (JÁ MERGEADO)
                     if(data.inscricao_estadual) {
                         document.getElementById('inputIe').value = data.inscricao_estadual;
                     }
