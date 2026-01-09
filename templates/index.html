@@ -54,6 +54,7 @@
             box-shadow: 0 0 0 0.25rem rgba(227, 25, 55, 0.25);
         }
         .form-control::placeholder { color: #6c757d; }
+        .form-control:disabled { background-color: rgba(255,255,255,0.02); }
         
         option { background-color: var(--brand-card); color: white; }
 
@@ -117,9 +118,42 @@
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: var(--brand-dark); }
         ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+        
+        /* Custom Modal */
+        .modal-content {
+            background-color: var(--brand-card);
+            border: 1px solid var(--border-color);
+            color: white;
+        }
     </style>
 </head>
 <body>
+
+    <div class="modal fade" id="modalAjuda" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header border-secondary">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-info-circle me-2"></i>Instruções de Uso</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <h6 class="text-white fw-bold">Como emitir um protocolo?</h6>
+                    <ol class="small text-muted ps-3">
+                        <li class="mb-2">Escolha os itens do showroom que o cliente vai levar.</li>
+                        <li class="mb-2">Preencha o CNPJ para buscar os dados da empresa automaticamente.</li>
+                        <li class="mb-2">Informe o contato e endereço de entrega.</li>
+                        <li class="mb-2">Clique em "Gerar Protocolo".</li>
+                    </ol>
+                    <hr class="border-secondary">
+                    <h6 class="text-white fw-bold">Devolução e Assinatura</h6>
+                    <ul class="small text-muted ps-3">
+                        <li class="mb-2">O cliente receberá um e-mail do <strong>Autentique</strong> para assinar digitalmente.</li>
+                        <li class="mb-2">Na devolução, acesse o painel, busque a amostra e clique em "Registrar Devolução". <strong>Verifique se a peça está íntegra.</strong></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
 
     {% if view_mode == 'login' %}
     <div class="container d-flex align-items-center justify-content-center" style="height: 100vh;">
@@ -140,6 +174,9 @@
         <div class="container">
             <span class="navbar-brand fw-bold">Elo Showroom</span>
             <div class="d-flex align-items-center gap-3">
+                <button type="button" class="btn btn-link text-white p-0" data-bs-toggle="modal" data-bs-target="#modalAjuda" title="Ajuda">
+                    <i class="bi bi-question-circle fs-5"></i>
+                </button>
                 <a href="/showroom/protocolos" class="btn btn-outline-light btn-sm"><i class="bi bi-file-earmark-pdf"></i> Protocolos</a>
                 <span class="text-white small d-none d-md-block">{{ user }}</span>
                 <a href="/showroom/perfil/senha" class="btn btn-outline-secondary btn-sm" title="Alterar Senha"><i class="bi bi-key"></i></a>
@@ -150,6 +187,44 @@
 
     <div class="container">
         
+        <div class="row g-4 mb-4">
+            <div class="col-md-4">
+                <div class="content-box p-3 h-100 d-flex align-items-center">
+                    <div class="me-3 bg-primary bg-opacity-25 p-3 rounded text-primary">
+                        <i class="bi bi-box-seam fs-3"></i>
+                    </div>
+                    <div>
+                        <small class="text-muted text-uppercase d-block fw-bold" style="font-size: 0.7rem;">Estoque Total</small>
+                        <h4 class="mb-0 fw-bold text-white">{{ total_estoque }} pçs</h4>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="content-box p-3 h-100 d-flex align-items-center">
+                    <div class="me-3 bg-success bg-opacity-25 p-3 rounded text-success">
+                        <i class="bi bi-currency-dollar fs-3"></i>
+                    </div>
+                    <div>
+                        <small class="text-muted text-uppercase d-block fw-bold" style="font-size: 0.7rem;">Valor Total / Ticket Médio</small>
+                        <h4 class="mb-0 fw-bold text-white">R$ {{ "{:,.2f}".format(valor_estoque) }}</h4>
+                        <small class="text-success">Médio: R$ {{ "{:,.2f}".format(ticket_medio) }}</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="content-box p-3 h-100 d-flex align-items-center">
+                    <div class="me-3 bg-warning bg-opacity-25 p-3 rounded text-warning">
+                        <i class="bi bi-activity fs-3"></i>
+                    </div>
+                    <div>
+                        <small class="text-muted text-uppercase d-block fw-bold" style="font-size: 0.7rem;">Movimentação Hoje</small>
+                        <h4 class="mb-0 fw-bold text-white">{{ mov_hoje }} eventos</h4>
+                        <small class="text-muted">Saídas/Retornos</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="content-box py-3 mb-4">
             <form action="/showroom/dashboard" method="GET" class="row g-3 align-items-center">
                 <div class="col-md-5">
@@ -183,8 +258,7 @@
             <div class="col-12">
                 <div class="content-box p-0 h-100">
                     <div class="p-3 border-bottom bg-light rounded-top d-flex justify-content-between align-items-center">
-                        <h6 class="mb-0 fw-bold text-white">💎 Showroom & Logística</h6>
-                        <span class="badge bg-secondary">{{ amostras|length + produtos_showroom|length }} peças</span>
+                        <h6 class="mb-0 fw-bold text-white">💎 Inventário Detalhado</h6>
                     </div>
                     <div class="p-3">
                         
@@ -344,6 +418,14 @@
                         
                         {% if item.status == 'EM_RUA' %}
                             <input type="hidden" name="acao_amostra" value="devolver">
+                            
+                            <div class="form-check mb-3 p-3 border border-secondary rounded bg-dark">
+                                <input class="form-check-input" type="checkbox" id="checkDevolucao" required>
+                                <label class="form-check-label small text-white" for="checkDevolucao">
+                                    Confirmo que recebi a amostra e verifiquei que está em boas condições de uso.
+                                </label>
+                            </div>
+
                             <button type="submit" class="btn btn-success w-100 fw-bold py-2">Registrar Devolução</button>
                         {% endif %}
                         
@@ -436,7 +518,8 @@
                                 <th>ID</th>
                                 <th>Cliente</th>
                                 <th>Empresa</th>
-                                <th>Data</th>
+                                <th>Envio</th>
+                                <th>Devolução Prevista</th>
                                 <th>Status</th>
                                 <th class="text-end">Ações</th>
                             </tr>
@@ -447,7 +530,8 @@
                                 <td class="fw-bold text-white">#{{ p.id }}</td>
                                 <td>{{ p.cliente_nome }}</td>
                                 <td>{{ p.cliente_empresa }}</td>
-                                <td>{{ p.data_criacao.strftime('%d/%m/%Y') }}</td>
+                                <td>{{ p.data_envio.strftime('%d/%m/%Y') if p.data_envio else '-' }}</td>
+                                <td class="text-danger fw-bold">{{ p.data_prevista_devolucao.strftime('%d/%m/%Y') }}</td>
                                 <td>
                                     {% if p.status == 'ABERTO' %}
                                         <span class="badge bg-warning text-dark">Em Aberto</span>
@@ -481,32 +565,93 @@
             <div class="col-lg-8">
                 <div class="content-box">
                     <h4 class="fw-bold mb-4 text-white border-bottom pb-3">Novo Protocolo de Amostra</h4>
+                    
+                    {% if erro_validacao %}
+                        <div class="alert alert-danger bg-danger bg-opacity-25 text-white border-danger mb-4">
+                            <i class="bi bi-exclamation-octagon-fill me-2"></i> <strong>Não foi possível gerar:</strong> {{ erro_validacao }}
+                        </div>
+                    {% endif %}
+
                     <form method="POST">
                         <div class="row g-3">
-                            <h6 class="text-muted text-uppercase small mt-4">Dados do Cliente</h6>
+                            <h6 class="text-muted text-uppercase small mt-4">Dados da Empresa / Cliente</h6>
                             <div class="col-md-6">
-                                <label class="form-label small">Nome do Contato</label>
+                                <label class="form-label small">CNPJ (Busca Automática)</label>
+                                <div class="input-group">
+                                    <input type="text" name="cliente_cnpj" id="inputCnpj" class="form-control" placeholder="Apenas números" onblur="buscarCnpj(this.value)">
+                                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                                </div>
+                                <small id="statusCnpj" class="text-muted" style="font-size: 0.75rem;"></small>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small">Razão Social / Empresa</label>
+                                <input type="text" name="cliente_empresa" id="inputEmpresa" class="form-control" required>
+                            </div>
+                            
+                            <div class="col-md-6">
+                                <label class="form-label small">Nome Contato</label>
                                 <input type="text" name="cliente_nome" class="form-control" required>
                             </div>
                             <div class="col-md-6">
-                                <label class="form-label small">Empresa</label>
-                                <input type="text" name="cliente_empresa" class="form-control" required>
+                                <label class="form-label small">Sobrenome Contato</label>
+                                <input type="text" name="cliente_sobrenome" class="form-control" required>
                             </div>
-                            <div class="col-md-6">
-                                <label class="form-label small">CNPJ</label>
-                                <input type="text" name="cliente_cnpj" class="form-control">
-                            </div>
+
                             <div class="col-md-6">
                                 <label class="form-label small">Telefone</label>
                                 <input type="text" name="cliente_telefone" class="form-control">
                             </div>
-                            <div class="col-md-12">
+                            <div class="col-md-6">
                                 <label class="form-label small">E-mail do Cliente</label>
                                 <input type="email" name="cliente_email" class="form-control" required>
                             </div>
-                            <div class="col-md-12">
-                                <label class="form-label small">Endereço Completo</label>
-                                <input type="text" name="cliente_endereco" class="form-control" required>
+
+                            <h6 class="text-muted text-uppercase small mt-4">Endereço de Entrega</h6>
+                            <div class="col-md-3">
+                                <label class="form-label small">CEP</label>
+                                <input type="text" name="endereco_cep" id="inputCep" class="form-control" required>
+                            </div>
+                            <div class="col-md-7">
+                                <label class="form-label small">Rua / Logradouro</label>
+                                <input type="text" name="endereco_rua" id="inputLogradouro" class="form-control" required>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label small">Número</label>
+                                <input type="text" name="endereco_numero" id="inputNumero" class="form-control" required>
+                            </div>
+                            <div class="col-md-5">
+                                <label class="form-label small">Bairro</label>
+                                <input type="text" name="endereco_bairro" id="inputBairro" class="form-control" required>
+                            </div>
+                            <div class="col-md-5">
+                                <label class="form-label small">Cidade</label>
+                                <input type="text" name="endereco_cidade" id="inputCidade" class="form-control" required>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label small">UF</label>
+                                <input type="text" name="endereco_uf" id="inputUf" class="form-control" required>
+                            </div>
+
+                            <h6 class="text-muted text-uppercase small mt-4">Logística de Envio</h6>
+                            <div class="col-md-4">
+                                <label class="form-label small">Transportadora / Portador</label>
+                                <input type="text" name="transportadora" class="form-control" placeholder="Ex: Correios, Loggi...">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small">Cód. Rastreio</label>
+                                <input type="text" name="rastreio" class="form-control">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small">Nome Entregador (Se houver)</label>
+                                <input type="text" name="entregador" class="form-control">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small">Data de Envio</label>
+                                <input type="date" name="data_envio" class="form-control" value="{{ now_date }}">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small text-danger fw-bold">Data Prevista Devolução</label>
+                                <input type="date" name="data_prevista" class="form-control" required>
                             </div>
 
                             <h6 class="text-muted text-uppercase small mt-4">Itens da Solicitação</h6>
@@ -528,10 +673,6 @@
                                 <button type="button" class="btn btn-outline-secondary btn-sm" onclick="addRow()">+ Adicionar Item</button>
                             </div>
 
-                            <div class="col-md-6 mt-4">
-                                <label class="form-label small">Data Prevista Devolução</label>
-                                <input type="date" name="data_prevista" class="form-control" required>
-                            </div>
                         </div>
 
                         <div class="d-grid gap-2 mt-5">
@@ -549,6 +690,37 @@
         const urlParams = new URLSearchParams(window.location.search);
         const preSku = urlParams.get('item_sku') || '';
         const preNome = urlParams.get('item_nome') || '';
+
+        // FUNÇÃO DE BUSCA CNPJ
+        function buscarCnpj(cnpj) {
+            cnpj = cnpj.replace(/\D/g, '');
+            if(cnpj.length !== 14) return;
+            
+            const statusMsg = document.getElementById('statusCnpj');
+            statusMsg.innerText = "Buscando dados...";
+            
+            fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`)
+                .then(response => {
+                    if(!response.ok) throw new Error("CNPJ não encontrado");
+                    return response.json();
+                })
+                .then(data => {
+                    statusMsg.innerText = "Empresa encontrada!";
+                    statusMsg.className = "text-success small";
+                    
+                    document.getElementById('inputEmpresa').value = data.razao_social;
+                    document.getElementById('inputCep').value = data.cep;
+                    document.getElementById('inputLogradouro').value = data.logradouro;
+                    document.getElementById('inputNumero').value = data.numero;
+                    document.getElementById('inputBairro').value = data.bairro;
+                    document.getElementById('inputCidade').value = data.municipio;
+                    document.getElementById('inputUf').value = data.uf;
+                })
+                .catch(err => {
+                    statusMsg.innerText = "Erro ao buscar CNPJ.";
+                    statusMsg.className = "text-danger small";
+                });
+        }
 
         function autoFill(input, type) {
             const row = input.closest('.item-row');
@@ -592,10 +764,18 @@
         }
 
         document.addEventListener("DOMContentLoaded", function() {
-            if(preNome || preSku) {
-                addRow(preSku, preNome);
-            } else {
-                addRow();
+            if(document.getElementById('items-container')) {
+                if(preNome || preSku) {
+                    addRow(preSku, preNome);
+                } else {
+                    addRow();
+                }
+                
+                // Set default date for envio
+                const dateInput = document.querySelector('input[name="data_envio"]');
+                if(dateInput && !dateInput.value) {
+                    dateInput.valueAsDate = new Date();
+                }
             }
         });
     </script>
