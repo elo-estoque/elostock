@@ -43,6 +43,8 @@ db = SQLAlchemy(app)
 DIRECTUS_URL = os.environ.get("DIRECTUS_URL")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
+# Token opcional para o CNPJa (se tiver, coloque no .env, senão ele tenta sem)
+CNPJA_TOKEN = os.environ.get("CNPJA_TOKEN")
 
 # --- CONFIGURAÇÃO AUTENTIQUE ---
 AUTENTIQUE_TOKEN = os.environ.get("AUTENTIQUE_TOKEN")
@@ -109,11 +111,11 @@ class Protocolo(db.Model):
     vendedor_email = db.Column(db.String(150))
     
     # Dados do Cliente
-    cliente_nome = db.Column(db.String(150))
-    cliente_sobrenome = db.Column(db.String(150))
-    cliente_empresa = db.Column(db.String(150))
+    cliente_nome = db.Column(db.String(150)) # Nome
+    cliente_sobrenome = db.Column(db.String(150)) # Sobrenome
+    cliente_empresa = db.Column(db.String(150)) # Razão Social
     cliente_cnpj = db.Column(db.String(50))
-    endereco_ie = db.Column(db.String(50)) 
+    endereco_ie = db.Column(db.String(50)) # IE
     
     cliente_email = db.Column(db.String(150))
     cliente_telefone = db.Column(db.String(50))
@@ -395,7 +397,7 @@ def index():
     if 'user_email' in session: return redirect('/showroom/dashboard')
     return render_template('index.html', view_mode='login')
 
-# --- NOVA ROTA API INTERNA (PROXY COM FALLBACK CNPJa) ---
+# --- NOVA ROTA API INTERNA (PROXY DE CNPJ COM SUPORTE A IE) ---
 @app.route('/showroom/api/consulta_cnpj/<cnpj>')
 def consulta_cnpj_proxy(cnpj):
     if 'user_email' not in session: return jsonify({'erro': 'Acesso negado'}), 403
@@ -403,7 +405,7 @@ def consulta_cnpj_proxy(cnpj):
     cnpj_limpo = ''.join(filter(str.isdigit, cnpj))
     dados_finais = {}
 
-    # 1. Tenta BrasilAPI (Dados básicos da Receita)
+    # 1. Tenta BrasilAPI (Gratuita, Rápida para Endereço)
     try:
         resp = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj_limpo}", timeout=5)
         if resp.status_code == 200:
@@ -411,22 +413,29 @@ def consulta_cnpj_proxy(cnpj):
     except Exception as e:
         print(f"Erro BrasilAPI: {e}")
 
-    # 2. Tenta CNPJá Open API (Para pegar IE se faltar)
+    # 2. Busca Inscrição Estadual (IE) via CNPJa (Endpoint Público ou com Token)
+    # A BrasilAPI raramente retorna IE, então forçamos a busca no CNPJa se a IE não existir
     ie_encontrada = dados_finais.get('inscricao_estadual')
     
     if not ie_encontrada: 
         try:
-            # Endpoint público gratuito do CNPJa: /office/{cnpj}
-            # Referência: https://cnpja.com/api/open
-            resp_cnpja = requests.get(f"https://cnpja.com/api/v1/office/{cnpj_limpo}", timeout=6)
+            # Configura Headers para evitar bloqueio e usa o Token se disponível
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            if CNPJA_TOKEN:
+                headers['Authorization'] = CNPJA_TOKEN
+            
+            # Endpoint público/office do CNPJa que contém as inscrições (registrations)
+            resp_cnpja = requests.get(f"https://api.cnpja.com/office/{cnpj_limpo}", headers=headers, timeout=8)
             
             if resp_cnpja.status_code == 200:
                 dados_cnpja = resp_cnpja.json()
                 
-                # Se BrasilAPI falhou, usa dados cadastrais do CNPJa
+                # Se BrasilAPI falhou totalmente, usa dados cadastrais do CNPJa
                 if not dados_finais:
                     dados_finais = {
-                        'razao_social': dados_cnpja.get('name'),
+                        'razao_social': dados_cnpja.get('name') or dados_cnpja.get('company', {}).get('name'),
                         'nome_fantasia': dados_cnpja.get('alias'),
                         'logradouro': dados_cnpja.get('address', {}).get('street'),
                         'numero': dados_cnpja.get('address', {}).get('number'),
@@ -436,17 +445,30 @@ def consulta_cnpj_proxy(cnpj):
                         'cep': dados_cnpja.get('address', {}).get('zip')
                     }
                 
-                # Tenta extrair Inscrição Estadual do array 'registrations' (Padrão CNPJa)
-                registros = dados_cnpja.get('registrations', [])
-                if registros:
-                    for reg in registros:
-                        if reg.get('type') == 'State' and reg.get('number'):
-                            dados_finais['inscricao_estadual'] = reg.get('number')
-                            break # Pega a primeira IE válida
+                # LÓGICA PARA EXTRAIR A INSCRIÇÃO ESTADUAL (IE)
+                # O CNPJa retorna uma lista 'registrations' ou 'inscriptions'. Varremos para achar a ativa.
+                registros = dados_cnpja.get('registrations', []) or dados_cnpja.get('sincor', [])
+                estado_empresa = dados_finais.get('uf')
                 
-                # Fallback antigo se vier direto no objeto (raro na v1)
-                elif 'inscricao_estadual' in dados_cnpja:
-                     dados_finais['inscricao_estadual'] = dados_cnpja['inscricao_estadual']
+                ie_localizada = None
+
+                # Tenta achar a IE do mesmo estado da empresa
+                if registros and isinstance(registros, list):
+                    for reg in registros:
+                        if reg.get('state') == estado_empresa and reg.get('number'):
+                            ie_localizada = reg.get('number')
+                            break
+                    
+                    # Se não achou do estado, pega a primeira disponível
+                    if not ie_localizada and len(registros) > 0:
+                        ie_localizada = registros[0].get('number')
+
+                # Tenta campo direto se a lista falhar
+                if not ie_localizada:
+                     ie_localizada = dados_cnpja.get('inscricao_estadual')
+
+                if ie_localizada:
+                    dados_finais['inscricao_estadual'] = ie_localizada
 
         except Exception as e:
             print(f"Erro CNPJa: {e}")
