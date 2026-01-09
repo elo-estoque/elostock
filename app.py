@@ -413,7 +413,7 @@ def consulta_cnpj_proxy(cnpj):
     except Exception as e:
         print(f"Erro BrasilAPI: {e}")
 
-    # 2. Busca Inscrição Estadual (IE) via CNPJa (Endpoint Público ou com Token)
+    # 2. Busca Inscrição Estadual (IE) via CNPJa (API PUBLICA)
     # A BrasilAPI raramente retorna IE, então forçamos a busca no CNPJa se a IE não existir
     ie_encontrada = dados_finais.get('inscricao_estadual')
     
@@ -426,8 +426,8 @@ def consulta_cnpj_proxy(cnpj):
             if CNPJA_TOKEN:
                 headers['Authorization'] = CNPJA_TOKEN
             
-            # Endpoint público/office do CNPJa que contém as inscrições (registrations)
-            resp_cnpja = requests.get(f"https://api.cnpja.com/office/{cnpj_limpo}", headers=headers, timeout=8)
+            # --- CORREÇÃO: Endpoint da API PÚBLICA (Open) ---
+            resp_cnpja = requests.get(f"https://cnpja.com/api/open/cnpj/{cnpj_limpo}", headers=headers, timeout=8)
             
             if resp_cnpja.status_code == 200:
                 dados_cnpja = resp_cnpja.json()
@@ -445,9 +445,9 @@ def consulta_cnpj_proxy(cnpj):
                         'cep': dados_cnpja.get('address', {}).get('zip')
                     }
                 
-                # LÓGICA PARA EXTRAIR A INSCRIÇÃO ESTADUAL (IE)
-                # O CNPJa retorna uma lista 'registrations' ou 'inscriptions'. Varremos para achar a ativa.
-                registros = dados_cnpja.get('registrations', []) or dados_cnpja.get('sincor', [])
+                # LÓGICA PARA EXTRAIR A INSCRIÇÃO ESTADUAL (IE) NA API PÚBLICA
+                # A API Pública pode retornar IE em 'sincor', 'registrations' ou 'inscriptions'
+                registros = dados_cnpja.get('sincor', []) or dados_cnpja.get('registrations', []) or dados_cnpja.get('inscriptions', [])
                 estado_empresa = dados_finais.get('uf')
                 
                 ie_localizada = None
@@ -455,15 +455,17 @@ def consulta_cnpj_proxy(cnpj):
                 # Tenta achar a IE do mesmo estado da empresa
                 if registros and isinstance(registros, list):
                     for reg in registros:
-                        if reg.get('state') == estado_empresa and reg.get('number'):
+                        # O campo pode vir como 'state' ou 'uf'
+                        uf_reg = reg.get('state') or reg.get('uf')
+                        if uf_reg == estado_empresa and reg.get('number'):
                             ie_localizada = reg.get('number')
                             break
                     
-                    # Se não achou do estado, pega a primeira disponível
+                    # Se não achou do estado específico, tenta pegar a primeira válida (ex: Inscrição Única)
                     if not ie_localizada and len(registros) > 0:
                         ie_localizada = registros[0].get('number')
 
-                # Tenta campo direto se a lista falhar
+                # Tenta campo direto se a lista falhar (algumas versões retornam direto)
                 if not ie_localizada:
                      ie_localizada = dados_cnpja.get('inscricao_estadual')
 
