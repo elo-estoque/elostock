@@ -113,6 +113,9 @@ class Protocolo(db.Model):
     cliente_sobrenome = db.Column(db.String(150)) # Sobrenome
     cliente_empresa = db.Column(db.String(150)) # Razão Social
     cliente_cnpj = db.Column(db.String(50))
+    # NOVO CAMPO: INSCRIÇÃO ESTADUAL
+    endereco_ie = db.Column(db.String(50)) 
+    
     cliente_email = db.Column(db.String(150))
     cliente_telefone = db.Column(db.String(50))
     
@@ -131,6 +134,10 @@ class Protocolo(db.Model):
     entregador_nome = db.Column(db.String(100))
     data_envio = db.Column(db.DateTime) # Nova Data de Envio
     
+    # Dados do Vendedor (Armazenados localmente para PDF)
+    vendedor_nome = db.Column(db.String(150))
+    vendedor_telefone = db.Column(db.String(50))
+
     itens_json = db.Column(db.JSON) 
     status = db.Column(db.String(50), default='ABERTO')
     arquivo_pdf = db.Column(db.String(255))
@@ -159,12 +166,12 @@ def gerar_pdf_protocolo(protocolo):
     d_envio = protocolo.data_envio.strftime('%d/%m/%Y') if protocolo.data_envio else (protocolo.data_criacao.strftime('%d/%m/%Y') if protocolo.data_criacao else '--/--/----')
     d_dev = protocolo.data_prevista_devolucao.strftime('%d/%m/%Y') if protocolo.data_prevista_devolucao else '--/--/----'
     
-    # Tenta pegar info extra da sessão se disponível (simulação)
-    vendedor_info = f"{protocolo.vendedor_email}"
+    # Usa os dados do vendedor salvos no protocolo, ou fallback para sessão/email
+    vendedor_txt = f"{protocolo.vendedor_nome} | {protocolo.vendedor_telefone}" if protocolo.vendedor_nome else f"{protocolo.vendedor_email}"
     
     dados_topo = [
         [f"DATA DE ENVIO: {d_envio}", f"DEVOLUÇÃO PREVISTA: {d_dev}"],
-        [f"VENDEDOR: {vendedor_info}", ""]
+        [f"VENDEDOR: {vendedor_txt}", ""]
     ]
     t_topo = Table(dados_topo, colWidths=[10*cm, 9*cm])
     t_topo.setStyle(TableStyle([
@@ -187,8 +194,9 @@ def gerar_pdf_protocolo(protocolo):
 
     dados_cliente = [
         ["Empresa:", protocolo.cliente_empresa or ''],
-        ["Contato:", nome_completo],
         ["CNPJ:", protocolo.cliente_cnpj or ''],
+        ["Inscr. Estadual:", protocolo.endereco_ie or 'ISENTO'],  # ADICIONADO NO PDF
+        ["Contato:", nome_completo],
         ["Email:", protocolo.cliente_email or ''],
         ["Telefone:", protocolo.cliente_telefone or ''],
         ["Endereço:", endereco_completo]
@@ -495,8 +503,14 @@ def novo_protocolo():
             'sobrenome': request.form.get('cliente_sobrenome'),
             'empresa': request.form.get('cliente_empresa'),
             'cnpj': request.form.get('cliente_cnpj'),
+            'ie': request.form.get('endereco_ie'), # IE ADICIONADA AQUI
             'email': request.form.get('cliente_email'),
             'telefone': request.form.get('cliente_telefone'),
+            
+            # Dados do Vendedor (do form)
+            'vendedor_nome': request.form.get('vendedor_nome'),
+            'vendedor_telefone': request.form.get('vendedor_telefone'),
+
             # Endereço Separado
             'cep': request.form.get('endereco_cep'),
             'rua': request.form.get('endereco_rua'),
@@ -577,10 +591,16 @@ def novo_protocolo():
                 novo = Protocolo(
                     id=proximo_id,
                     vendedor_email=session['user_email'],
+                    
+                    # Vendedor (Do Form)
+                    vendedor_nome=cliente_dados['vendedor_nome'],
+                    vendedor_telefone=cliente_dados['vendedor_telefone'],
+
                     cliente_nome=cliente_dados['nome'],
                     cliente_sobrenome=cliente_dados['sobrenome'],
                     cliente_empresa=cliente_dados['empresa'],
                     cliente_cnpj=cliente_dados['cnpj'],
+                    endereco_ie=cliente_dados['ie'], # SALVA NO BANCO
                     cliente_email=cliente_dados['email'],
                     cliente_telefone=cliente_dados['telefone'],
                     
