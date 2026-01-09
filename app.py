@@ -17,7 +17,7 @@ from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from flask import Flask, request, render_template, session, redirect, url_for, jsonify, render_template_string, make_response
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import or_, and_
+from sqlalchemy import or_, and_, func
 from slack_bolt import App as BoltApp
 from slack_bolt.adapter.flask import SlackRequestHandler
 
@@ -46,7 +46,6 @@ SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
 
 # --- CONFIGURAÇÃO AUTENTIQUE ---
 AUTENTIQUE_TOKEN = os.environ.get("AUTENTIQUE_TOKEN")
-# Usar URL correta da API V2
 AUTENTIQUE_URL = "https://api.autentique.com.br/v2/graphql"
 
 # Configuração de E-mail (SMTP)
@@ -108,12 +107,30 @@ class Protocolo(db.Model):
     __tablename__ = 'protocolos'
     id = db.Column(db.Integer, primary_key=True)
     vendedor_email = db.Column(db.String(150))
-    cliente_nome = db.Column(db.String(150))
-    cliente_empresa = db.Column(db.String(150))
+    
+    # Dados do Cliente (Separados conforme solicitado)
+    cliente_nome = db.Column(db.String(150)) # Nome
+    cliente_sobrenome = db.Column(db.String(150)) # Sobrenome
+    cliente_empresa = db.Column(db.String(150)) # Razão Social
     cliente_cnpj = db.Column(db.String(50))
     cliente_email = db.Column(db.String(150))
     cliente_telefone = db.Column(db.String(50))
-    cliente_endereco = db.Column(db.Text)
+    
+    # Endereço Separado
+    endereco_cep = db.Column(db.String(20))
+    endereco_rua = db.Column(db.String(200))
+    endereco_numero = db.Column(db.String(20))
+    endereco_bairro = db.Column(db.String(100))
+    endereco_cidade = db.Column(db.String(100))
+    endereco_uf = db.Column(db.String(5))
+    cliente_endereco = db.Column(db.Text) # Mantido para compatibilidade, concatenação dos acima
+    
+    # Rastreio e Envio
+    transportadora = db.Column(db.String(100))
+    rastreio = db.Column(db.String(100))
+    entregador_nome = db.Column(db.String(100))
+    data_envio = db.Column(db.DateTime) # Nova Data de Envio
+    
     itens_json = db.Column(db.JSON) 
     status = db.Column(db.String(50), default='ABERTO')
     arquivo_pdf = db.Column(db.String(255))
@@ -138,13 +155,16 @@ def gerar_pdf_protocolo(protocolo):
     elements.append(Paragraph(f"PROTOCOLO DE AMOSTRA <b>#{protocolo.id}</b>", styles['Heading2']))
     elements.append(Spacer(1, 0.5 * cm))
     
-    # Datas e Vendedor
-    d_envio = protocolo.data_criacao.strftime('%d/%m/%Y') if protocolo.data_criacao else '--/--/----'
+    # Dados de Datas e Vendedor
+    d_envio = protocolo.data_envio.strftime('%d/%m/%Y') if protocolo.data_envio else (protocolo.data_criacao.strftime('%d/%m/%Y') if protocolo.data_criacao else '--/--/----')
     d_dev = protocolo.data_prevista_devolucao.strftime('%d/%m/%Y') if protocolo.data_prevista_devolucao else '--/--/----'
+    
+    # Tenta pegar info extra da sessão se disponível (simulação)
+    vendedor_info = f"{protocolo.vendedor_email}"
     
     dados_topo = [
         [f"DATA DE ENVIO: {d_envio}", f"DEVOLUÇÃO PREVISTA: {d_dev}"],
-        [f"VENDEDOR: {protocolo.vendedor_email or ''}", ""]
+        [f"VENDEDOR: {vendedor_info}", ""]
     ]
     t_topo = Table(dados_topo, colWidths=[10*cm, 9*cm])
     t_topo.setStyle(TableStyle([
@@ -158,13 +178,20 @@ def gerar_pdf_protocolo(protocolo):
 
     # Dados Cliente
     elements.append(Paragraph("<b>DADOS DO CLIENTE</b>", styles['Heading4']))
+    
+    endereco_completo = f"{protocolo.endereco_rua or ''}, {protocolo.endereco_numero or ''} - {protocolo.endereco_bairro or ''}, {protocolo.endereco_cidade or ''}/{protocolo.endereco_uf or ''} - CEP: {protocolo.endereco_cep or ''}"
+    if not protocolo.endereco_rua:
+        endereco_completo = protocolo.cliente_endereco # Fallback antigo
+        
+    nome_completo = f"{protocolo.cliente_nome} {protocolo.cliente_sobrenome or ''}"
+
     dados_cliente = [
         ["Empresa:", protocolo.cliente_empresa or ''],
-        ["Contato:", protocolo.cliente_nome or ''],
+        ["Contato:", nome_completo],
         ["CNPJ:", protocolo.cliente_cnpj or ''],
         ["Email:", protocolo.cliente_email or ''],
         ["Telefone:", protocolo.cliente_telefone or ''],
-        ["Endereço:", protocolo.cliente_endereco or '']
+        ["Endereço:", endereco_completo]
     ]
     t_cliente = Table(dados_cliente, colWidths=[3.5*cm, 15.5*cm])
     t_cliente.setStyle(TableStyle([
@@ -173,18 +200,34 @@ def gerar_pdf_protocolo(protocolo):
         ('PADDING', (0,0), (-1,-1), 4),
     ]))
     elements.append(t_cliente)
+    
+    # Dados de Envio/Rastreio
+    if protocolo.transportadora or protocolo.entregador_nome:
+        elements.append(Spacer(1, 0.2 * cm))
+        dados_envio = [
+            ["Transporte:", f"{protocolo.transportadora or 'Próprio'}"],
+            ["Rastreio/Entregador:", f"{protocolo.rastreio or protocolo.entregador_nome or '-'}"]
+        ]
+        t_envio = Table(dados_envio, colWidths=[3.5*cm, 15.5*cm])
+        t_envio.setStyle(TableStyle([
+            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+            ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold'),
+            ('PADDING', (0,0), (-1,-1), 4),
+        ]))
+        elements.append(t_envio)
+
     elements.append(Spacer(1, 0.5 * cm))
 
-    # Itens
+    # Itens (SEM SKU, conforme pedido)
     elements.append(Paragraph("<b>ITENS SOLICITADOS</b>", styles['Heading4']))
     
-    data_itens = [['SKU', 'PRODUTO / DESCRIÇÃO', 'QTD', 'UNIT.', 'TOTAL']]
+    # Removida coluna SKU do cabeçalho
+    data_itens = [['PRODUTO / DESCRIÇÃO', 'QTD', 'UNIT.', 'TOTAL']]
     total_protocolo = 0.0
     
     if protocolo.itens_json:
         for item in protocolo.itens_json:
             try:
-                sku_txt = str(item.get('sku') or '-')
                 nome_txt = str(item.get('nome') or 'Item sem nome')
                 qtd_txt = str(item.get('qtd') or '1')
                 
@@ -196,8 +239,8 @@ def gerar_pdf_protocolo(protocolo):
                 
                 total_protocolo += val_total
                 
+                # Removido SKU da linha
                 data_itens.append([
-                    sku_txt,
                     nome_txt,
                     qtd_txt,
                     f"R$ {val_unit:.2f}",
@@ -205,18 +248,19 @@ def gerar_pdf_protocolo(protocolo):
                 ])
             except Exception as e:
                 print(f"Erro processando item PDF: {e}")
-                data_itens.append(["ERR", "Erro nos dados do item", "0", "0.00", "0.00"])
+                data_itens.append(["Erro nos dados do item", "0", "0.00", "0.00"])
             
-    # Total Geral
-    data_itens.append(['', '', '', 'TOTAL:', f"R$ {total_protocolo:.2f}"])
+    # Total Geral (Ajuste de colunas pois removemos uma)
+    data_itens.append(['', '', 'TOTAL:', f"R$ {total_protocolo:.2f}"])
     
-    t_itens = Table(data_itens, colWidths=[3*cm, 8.5*cm, 2*cm, 2.5*cm, 2.5*cm])
+    # Ajuste colWidths para preencher a página sem a coluna SKU
+    t_itens = Table(data_itens, colWidths=[11.5*cm, 2*cm, 2.5*cm, 2.5*cm])
     t_itens.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.darkred),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('ALIGN', (1, 0), (1, -1), 'LEFT'), 
-        ('ALIGN', (3, 1), (-1, -1), 'RIGHT'), 
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'), # Nome alinhado a esquerda
+        ('ALIGN', (2, 1), (-1, -1), 'RIGHT'), 
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), 
         ('FONTNAME', (-2, -1), (-1, -1), 'Helvetica-Bold'),
         ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
@@ -251,7 +295,6 @@ def enviar_para_autentique(protocolo, pdf_bytes):
         print("⚠️ Token Autentique não configurado.")
         return {"erro": "Token Autentique não encontrado no .env"}
 
-    # --- QUERY CORRIGIDA (SEM CAMPO 'signed') ---
     operations = {
         "query": """
         mutation CreateDocumentMutation(
@@ -349,11 +392,15 @@ def index():
                 session['user_token'] = token
                 session['user_email'] = email
                 headers = {"Authorization": f"Bearer {token}"}
-                user_info = requests.get(f"{DIRECTUS_URL}/users/me?fields=role.name", headers=headers, verify=False)
+                user_info = requests.get(f"{DIRECTUS_URL}/users/me?fields=role.name,first_name,last_name,title", headers=headers, verify=False)
                 if user_info.status_code == 200:
                     data = user_info.json().get('data', {})
                     role_name = data.get('role', {}).get('name', 'Public') if data.get('role') else 'Public'
                     session['user_role'] = role_name.upper()
+                    # Salva dados extras se existirem
+                    session['user_name'] = f"{data.get('first_name','')} {data.get('last_name','')}"
+                    # Assumindo que o campo 'title' ou outro campo custom seja o whatsapp
+                    session['user_phone'] = data.get('title', '') 
                 else:
                     session['user_role'] = 'PUBLIC'
                 return redirect('/showroom/dashboard')
@@ -370,6 +417,19 @@ def dashboard():
     search_query = request.args.get('q', '').strip()
     filter_cat = request.args.get('cat', '').strip()
     filter_sub = request.args.get('sub', '').strip() 
+
+    # --- MÉTRICAS GERAIS ---
+    # Quantidade total de peças em estoque
+    total_estoque = db.session.query(func.sum(Produto.quantidade)).scalar() or 0
+    # Valor total do inventário (Qtd * Valor Unitário)
+    valor_estoque = db.session.query(func.sum(Produto.quantidade * Produto.valor_unitario)).scalar() or 0
+    # Mix / Ticket Médio
+    ticket_medio = (valor_estoque / total_estoque) if total_estoque > 0 else 0
+    
+    # Histórico Diário (Últimos logs agrupados por dia)
+    # Exemplo simples de contagem de movimentações hoje
+    hoje = datetime.now().date()
+    movimentacoes_hoje = Log.query.filter(func.date(Log.data_evento) == hoje).count()
 
     produtos_showroom = [] 
     amostras = []
@@ -407,7 +467,9 @@ def dashboard():
                            produtos_showroom=produtos_showroom, amostras=amostras, 
                            categorias=categorias_disponiveis, subcategorias=subcategorias_disponiveis,
                            search_query=search_query, selected_cat=filter_cat, selected_sub=filter_sub,
-                           user=session['user_email'], role=role)
+                           user=session['user_email'], role=role,
+                           total_estoque=total_estoque, valor_estoque=valor_estoque, 
+                           ticket_medio=ticket_medio, mov_hoje=movimentacoes_hoje)
 
 @app.route('/showroom/protocolos')
 def listar_protocolos():
@@ -426,86 +488,124 @@ def novo_protocolo():
     
     if request.method == 'POST':
         acao = request.form.get('acao')
+        
+        # Recupera dados do form
+        cliente_dados = {
+            'nome': request.form.get('cliente_nome'),
+            'sobrenome': request.form.get('cliente_sobrenome'),
+            'empresa': request.form.get('cliente_empresa'),
+            'cnpj': request.form.get('cliente_cnpj'),
+            'email': request.form.get('cliente_email'),
+            'telefone': request.form.get('cliente_telefone'),
+            # Endereço Separado
+            'cep': request.form.get('endereco_cep'),
+            'rua': request.form.get('endereco_rua'),
+            'numero': request.form.get('endereco_numero'),
+            'bairro': request.form.get('endereco_bairro'),
+            'cidade': request.form.get('endereco_cidade'),
+            'uf': request.form.get('endereco_uf'),
+            'data_prevista': request.form.get('data_prevista'),
+            'data_envio': request.form.get('data_envio'),
+            'transportadora': request.form.get('transportadora'),
+            'rastreio': request.form.get('rastreio'),
+            'entregador': request.form.get('entregador')
+        }
+
+        # Constrói endereço completo p/ compatibilidade
+        endereco_str = f"{cliente_dados['rua']}, {cliente_dados['numero']} - {cliente_dados['bairro']}, {cliente_dados['cidade']}/{cliente_dados['uf']} - CEP: {cliente_dados['cep']}"
+
+        skus = request.form.getlist('item_sku[]')
+        nomes = request.form.getlist('item_nome[]')
+        qtds = request.form.getlist('item_qtd[]')
+
+        itens_processados = []
+        total_geral = 0.0
+        erros_validacao = []
+
+        for i in range(len(skus)):
+            if nomes[i].strip():
+                qtd_val = int(qtds[i])
+                prod = Produto.query.filter(
+                    or_(Produto.sku_produtos == skus[i], Produto.nome == nomes[i]),
+                    Produto.categoria_produtos.ilike('%showroom%')
+                ).first()
+
+                # --- VALIDAÇÃO DE ESTOQUE ---
+                if acao == 'confirmar' and prod:
+                    if prod.quantidade < qtd_val:
+                        erros_validacao.append(f"Produto '{prod.nome}' só tem {prod.quantidade} unidades em estoque (solicitado: {qtd_val}).")
+                
+                # Validação Amostra Única
+                amostra = Amostra.query.filter(
+                    or_(Amostra.sku_amostras == skus[i], Amostra.nome == nomes[i])
+                ).first()
+                if acao == 'confirmar' and amostra:
+                    if amostra.status != 'DISPONIVEL':
+                        erros_validacao.append(f"Amostra '{amostra.nome}' não está DISPONÍVEL (Status atual: {amostra.status}).")
+
+                preco = float(prod.valor_unitario) if (prod and prod.valor_unitario) else 0.0
+                subtotal = preco * qtd_val
+                total_geral += subtotal
+                itens_processados.append({
+                    "sku": skus[i], "nome": nomes[i], "qtd": qtd_val,
+                    "preco_unit": preco, "subtotal": subtotal
+                })
 
         if acao == 'revisar':
-            dados_cliente = {
-                'nome': request.form.get('cliente_nome'),
-                'empresa': request.form.get('cliente_empresa'),
-                'cnpj': request.form.get('cliente_cnpj'),
-                'email': request.form.get('cliente_email'),
-                'telefone': request.form.get('cliente_telefone'),
-                'endereco': request.form.get('cliente_endereco'),
-                'data_prevista': request.form.get('data_prevista')
-            }
-            skus = request.form.getlist('item_sku[]')
-            nomes = request.form.getlist('item_nome[]')
-            qtds = request.form.getlist('item_qtd[]')
-            
-            itens_preview = []
-            total_geral = 0.0
-            
-            for i in range(len(skus)):
-                if nomes[i].strip():
-                    qtd_val = int(qtds[i])
-                    prod = Produto.query.filter(
-                        or_(Produto.sku_produtos == skus[i], Produto.nome == nomes[i]),
-                        Produto.categoria_produtos.ilike('%showroom%')
-                    ).first()
-                    preco = float(prod.valor_unitario) if (prod and prod.valor_unitario) else 0.0
-                    subtotal = preco * qtd_val
-                    total_geral += subtotal
-                    itens_preview.append({
-                        "sku": skus[i], "nome": nomes[i], "qtd": qtd_val,
-                        "preco_unit": preco, "subtotal": subtotal
-                    })
-
             return render_template('index.html', view_mode='novo_protocolo', 
                                    user=session['user_email'], preview_mode=True,
-                                   dados_cliente=dados_cliente, itens_preview=itens_preview,
+                                   dados_cliente=cliente_dados, itens_preview=itens_processados,
                                    total_geral=total_geral, produtos_db=[]) 
 
         elif acao == 'confirmar':
+            if erros_validacao:
+                # Se houver erro, volta para a tela com mensagem
+                # Aqui simplificamos retornando a lista de produtos novamente para não quebrar a view
+                todos_produtos = Produto.query.filter(Produto.categoria_produtos.ilike('%showroom%')).with_entities(Produto.sku_produtos, Produto.nome).all()
+                lista_final = [{"sku": (p.sku_produtos or ""), "nome": p.nome} for p in todos_produtos]
+                return render_template('index.html', view_mode='novo_protocolo', 
+                                       user=session['user_email'], produtos_db=lista_final,
+                                       erro_validacao=" | ".join(erros_validacao), dados_cliente=cliente_dados)
+
             try:
-                data_prevista = datetime.strptime(request.form.get('data_prevista'), '%Y-%m-%d')
-                skus = request.form.getlist('item_sku[]')
-                nomes = request.form.getlist('item_nome[]')
-                qtds = request.form.getlist('item_qtd[]')
+                data_prevista = datetime.strptime(cliente_dados['data_prevista'], '%Y-%m-%d')
+                data_envio = datetime.strptime(cliente_dados['data_envio'], '%Y-%m-%d') if cliente_dados['data_envio'] else datetime.now()
                 
-                itens_json = []
-                for i in range(len(skus)):
-                    if nomes[i].strip():
-                        qtd_val = int(qtds[i])
-                        prod = Produto.query.filter(
-                            or_(Produto.sku_produtos == skus[i], Produto.nome == nomes[i]),
-                            Produto.categoria_produtos.ilike('%showroom%')
-                        ).first()
-                        preco_unit = float(prod.valor_unitario) if (prod and prod.valor_unitario) else 0.0
-                        subtotal = preco_unit * qtd_val
-                        itens_json.append({
-                            "sku": skus[i], "nome": nomes[i], "qtd": qtd_val,
-                            "preco_unit": preco_unit, "subtotal": subtotal
-                        })
-                
-                # --- FORÇAR ID BASEADO NO ÚLTIMO DO BANCO ---
                 ultimo_p = Protocolo.query.order_by(Protocolo.id.desc()).first()
                 proximo_id = (ultimo_p.id + 1) if ultimo_p else 1
 
                 novo = Protocolo(
-                    id=proximo_id, # <--- ID FORÇADO AQUI
+                    id=proximo_id,
                     vendedor_email=session['user_email'],
-                    cliente_nome=request.form.get('cliente_nome'),
-                    cliente_empresa=request.form.get('cliente_empresa'),
-                    cliente_cnpj=request.form.get('cliente_cnpj'),
-                    cliente_email=request.form.get('cliente_email'),
-                    cliente_telefone=request.form.get('cliente_telefone'),
-                    cliente_endereco=request.form.get('cliente_endereco'),
+                    cliente_nome=cliente_dados['nome'],
+                    cliente_sobrenome=cliente_dados['sobrenome'],
+                    cliente_empresa=cliente_dados['empresa'],
+                    cliente_cnpj=cliente_dados['cnpj'],
+                    cliente_email=cliente_dados['email'],
+                    cliente_telefone=cliente_dados['telefone'],
+                    
+                    # Endereço
+                    endereco_cep=cliente_dados['cep'],
+                    endereco_rua=cliente_dados['rua'],
+                    endereco_numero=cliente_dados['numero'],
+                    endereco_bairro=cliente_dados['bairro'],
+                    endereco_cidade=cliente_dados['cidade'],
+                    endereco_uf=cliente_dados['uf'],
+                    cliente_endereco=endereco_str,
+                    
+                    # Envio
+                    transportadora=cliente_dados['transportadora'],
+                    rastreio=cliente_dados['rastreio'],
+                    entregador_nome=cliente_dados['entregador'],
+                    data_envio=data_envio,
+
                     data_prevista_devolucao=data_prevista,
-                    itens_json=itens_json
+                    itens_json=itens_processados
                 )
                 db.session.add(novo)
                 
                 # --- PROCESSAR BAIXA/STATUS ---
-                for item in itens_json:
+                for item in itens_processados:
                     sku = item.get('sku')
                     nome = item.get('nome')
                     qtd_saida = int(item.get('qtd', 1))
@@ -514,7 +614,7 @@ def novo_protocolo():
                     if sku: amostra_db = Amostra.query.filter_by(sku_amostras=sku).first()
                     if not amostra_db and nome: amostra_db = Amostra.query.filter(Amostra.nome.ilike(nome)).first()
                     
-                    if amostra_db and amostra_db.status == 'DISPONIVEL':
+                    if amostra_db:
                         amostra_db.status = 'EM_RUA'
                         amostra_db.vendedor_responsavel = session['user_email']
                         amostra_db.cliente_destino = novo.cliente_empresa
@@ -522,7 +622,7 @@ def novo_protocolo():
                         amostra_db.data_prevista_retorno = data_prevista
                         db.session.add(Log(tipo_item='amostra', item_id=amostra_db.id, acao='PROTOCOLO_SAIDA', usuario_nome=session['user_email']))
                     
-                    elif not amostra_db:
+                    else:
                         prod_db = Produto.query.filter(
                             or_(Produto.sku_produtos == sku, Produto.nome == nome),
                             Produto.categoria_produtos.ilike('%showroom%')
@@ -536,7 +636,6 @@ def novo_protocolo():
                             ))
 
                 db.session.commit()
-                
                 return redirect(f'/showroom/protocolo/detalhe/{novo.id}')
                 
             except Exception as e:
@@ -572,17 +671,13 @@ def detalhe_protocolo(id):
         acao = request.form.get('acao')
         
         if acao == 'enviar_autentique':
-            # 1. Gera PDF
             pdf_bytes = gerar_pdf_protocolo(protocolo)
-            
-            # 2. Envia Autentique
             resultado = enviar_para_autentique(protocolo, pdf_bytes)
             
             if resultado.get('sucesso'):
                 msg = "✅ Documento enviado para o cliente via Autentique com sucesso!"
                 protocolo.status = 'AGUARDANDO_ASSINATURA'
                 db.session.commit()
-                # Enviar cópia interna
                 enviar_email_interno(protocolo, pdf_bytes)
             else:
                 erro = f"❌ Erro Autentique: {resultado.get('erro')}"
@@ -611,7 +706,6 @@ def acao(tipo, id):
     if tipo == 'produto':
         item = Produto.query.get_or_404(id)
         if 'showroom' in (item.categoria_produtos or '').lower():
-            # Hack de visualização
             item.sku_amostras = item.sku_produtos
             item.categoria_amostra = item.categoria_produtos
             item.status = 'DISPONIVEL'
@@ -641,6 +735,7 @@ def acao(tipo, id):
         if request.method == 'POST':
             acao_realizada = request.form.get('acao_amostra')
             if acao_realizada == 'devolver':
+                # Validação Simples (checkbox no front deve ser marcado)
                 item.status = 'DISPONIVEL'
                 item.vendedor_responsavel = None
                 item.cliente_destino = None
@@ -658,7 +753,6 @@ def acao(tipo, id):
 
     return render_template('index.html', view_mode='acao', item=item, tipo=tipo, msg=msg_sucesso)
 
-# --- NOVA ROTA: ALTERAR SENHA (INTEGRADA AO DIRECTUS) ---
 @app.route('/showroom/perfil/senha', methods=['GET', 'POST'])
 def alterar_senha():
     if 'user_email' not in session: return redirect('/showroom/')
@@ -675,7 +769,6 @@ def alterar_senha():
             erro = "A senha deve ter pelo menos 4 caracteres."
         else:
             try:
-                # Chama a API do Directus para atualizar o usuário atual (/users/me)
                 headers = {
                     "Authorization": f"Bearer {session.get('user_token')}",
                     "Content-Type": "application/json"
