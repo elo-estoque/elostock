@@ -43,7 +43,7 @@ db = SQLAlchemy(app)
 DIRECTUS_URL = os.environ.get("DIRECTUS_URL")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
-# Token opcional para o CNPJa (se tiver, coloque no .env, senão ele tenta sem)
+# Token antigo (mantido para não alterar estrutura global, mas não será usado na nova função)
 CNPJA_TOKEN = os.environ.get("CNPJA_TOKEN")
 
 # --- CONFIGURAÇÃO AUTENTIQUE ---
@@ -397,88 +397,66 @@ def index():
     if 'user_email' in session: return redirect('/showroom/dashboard')
     return render_template('index.html', view_mode='login')
 
-# --- NOVA ROTA API INTERNA (PROXY DE CNPJ COM SUPORTE A IE) ---
+# --- NOVA ROTA API INTERNA (CNPJ.WS) ---
 @app.route('/showroom/api/consulta_cnpj/<cnpj>')
 def consulta_cnpj_proxy(cnpj):
     if 'user_email' not in session: return jsonify({'erro': 'Acesso negado'}), 403
     
+    # Limpeza e Token
     cnpj_limpo = ''.join(filter(str.isdigit, cnpj))
-    dados_finais = {}
+    token = os.environ.get("CNPJ_WS_TOKEN")
 
-    # 1. Tenta BrasilAPI (Gratuita, Rápida para Endereço)
+    if not token:
+        print("ERRO: Token CNPJ_WS_TOKEN não encontrado no .env")
+        return jsonify({'erro': 'Token de consulta não configurado'}), 500
+
     try:
-        resp = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj_limpo}", timeout=5)
-        if resp.status_code == 200:
-            dados_finais = resp.json()
-    except Exception as e:
-        print(f"Erro BrasilAPI: {e}")
-
-    # 2. Busca Inscrição Estadual (IE) via CNPJa (API PUBLICA)
-    # A BrasilAPI raramente retorna IE, então forçamos a busca no CNPJa se a IE não existir
-    ie_encontrada = dados_finais.get('inscricao_estadual')
-    
-    if not ie_encontrada: 
-        try:
-            # Configura Headers para evitar bloqueio e usa o Token se disponível
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            if CNPJA_TOKEN:
-                headers['Authorization'] = CNPJA_TOKEN
+        # Consulta à API Comercial (CNPJ.WS)
+        url = f"https://publica.cnpj.ws/cnpj/{cnpj_limpo}"
+        resp = requests.get(url, params={"token": token}, timeout=10)
+        
+        if resp.status_code != 200:
+            return jsonify({'erro': 'CNPJ não encontrado ou erro na API'}), 404
             
-            # --- CORREÇÃO: Endpoint da API PÚBLICA (Open) ---
-            resp_cnpja = requests.get(f"https://cnpja.com/api/open/cnpj/{cnpj_limpo}", headers=headers, timeout=8)
-            
-            if resp_cnpja.status_code == 200:
-                dados_cnpja = resp_cnpja.json()
-                
-                # Se BrasilAPI falhou totalmente, usa dados cadastrais do CNPJa
-                if not dados_finais:
-                    dados_finais = {
-                        'razao_social': dados_cnpja.get('name') or dados_cnpja.get('company', {}).get('name'),
-                        'nome_fantasia': dados_cnpja.get('alias'),
-                        'logradouro': dados_cnpja.get('address', {}).get('street'),
-                        'numero': dados_cnpja.get('address', {}).get('number'),
-                        'bairro': dados_cnpja.get('address', {}).get('district'),
-                        'municipio': dados_cnpja.get('address', {}).get('city'),
-                        'uf': dados_cnpja.get('address', {}).get('state'),
-                        'cep': dados_cnpja.get('address', {}).get('zip')
-                    }
-                
-                # LÓGICA PARA EXTRAIR A INSCRIÇÃO ESTADUAL (IE) NA API PÚBLICA
-                # A API Pública pode retornar IE em 'sincor', 'registrations' ou 'inscriptions'
-                registros = dados_cnpja.get('sincor', []) or dados_cnpja.get('registrations', []) or dados_cnpja.get('inscriptions', [])
-                estado_empresa = dados_finais.get('uf')
-                
-                ie_localizada = None
+        data = resp.json()
+        estab = data.get('estabelecimento', {})
+        estado_empresa = estab.get('estado', {}).get('sigla')
+        
+        # --- LÓGICA DE INSCRIÇÃO ESTADUAL (IE) ---
+        ie_correta = None
+        inscricoes = estab.get('inscricoes_estaduais', [])
+        
+        # 1. Tenta IE ativa do mesmo estado
+        for ie in inscricoes:
+            if ie.get('ativo') and ie.get('estado', {}).get('sigla') == estado_empresa:
+                ie_correta = ie.get('inscricao_estadual')
+                break
+        
+        # 2. Fallback: Qualquer IE do mesmo estado
+        if not ie_correta:
+            for ie in inscricoes:
+                if ie.get('estado', {}).get('sigla') == estado_empresa:
+                    ie_correta = ie.get('inscricao_estadual')
+                    break
 
-                # Tenta achar a IE do mesmo estado da empresa
-                if registros and isinstance(registros, list):
-                    for reg in registros:
-                        # O campo pode vir como 'state' ou 'uf'
-                        uf_reg = reg.get('state') or reg.get('uf')
-                        if uf_reg == estado_empresa and reg.get('number'):
-                            ie_localizada = reg.get('number')
-                            break
-                    
-                    # Se não achou do estado específico, tenta pegar a primeira válida (ex: Inscrição Única)
-                    if not ie_localizada and len(registros) > 0:
-                        ie_localizada = registros[0].get('number')
+        # Montagem do Objeto
+        dados_finais = {
+            'razao_social': data.get('razao_social'),
+            'nome_fantasia': estab.get('nome_fantasia'),
+            'logradouro': f"{estab.get('tipo_logradouro', '')} {estab.get('logradouro', '')}".strip(),
+            'numero': estab.get('numero'),
+            'bairro': estab.get('bairro'),
+            'municipio': estab.get('cidade', {}).get('nome'),
+            'uf': estado_empresa,
+            'cep': estab.get('cep'),
+            'inscricao_estadual': ie_correta 
+        }
 
-                # Tenta campo direto se a lista falhar (algumas versões retornam direto)
-                if not ie_localizada:
-                     ie_localizada = dados_cnpja.get('inscricao_estadual')
-
-                if ie_localizada:
-                    dados_finais['inscricao_estadual'] = ie_localizada
-
-        except Exception as e:
-            print(f"Erro CNPJa: {e}")
-
-    if dados_finais:
         return jsonify(dados_finais)
-    else:
-        return jsonify({'erro': 'CNPJ não encontrado'}), 404
+
+    except Exception as e:
+        print(f"Erro na API CNPJ.ws: {e}")
+        return jsonify({'erro': 'Erro ao consultar API externa'}), 500
 
 @app.route('/showroom/dashboard')
 def dashboard():
